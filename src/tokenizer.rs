@@ -94,8 +94,23 @@ pub fn tokenize(input: String) -> Vec<Token> {
 ///
 /// This is a more efficient and more idiomatic entry point when the caller
 /// already has a `&str`.
+///
+/// # Panics
+/// Panics on invalid source for backward compatibility. Use [`try_tokenize_str`]
+/// when errors need to be reported without unwinding.
 pub fn tokenize_str(input: &str) -> Vec<Token> {
-    Tokenizer::new(input).tokenize()
+    try_tokenize_str(input).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Tokenizes source with recoverable diagnostics for invalid tokens, indentation,
+/// and overflowing literals. LF, CRLF, and CR use the same newline semantics.
+pub fn try_tokenize_str(input: &str) -> Result<Vec<Token>, String> {
+    if input.contains('\r') {
+        let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+        Tokenizer::new(&normalized).tokenize()
+    } else {
+        Tokenizer::new(input).tokenize()
+    }
 }
 
 /// Internal lexical analyzer state.
@@ -125,7 +140,7 @@ impl<'input> Tokenizer<'input> {
     }
 
     /// Runs the tokenizer to completion and returns the token stream.
-    fn tokenize(mut self) -> Vec<Token> {
+    fn tokenize(mut self) -> Result<Vec<Token>, String> {
         while let Some(ch) = self.chars.next() {
             if ch == '\n' {
                 self.push(Token::NewLine);
@@ -135,7 +150,7 @@ impl<'input> Tokenizer<'input> {
 
             if self.at_line_start {
                 if ch == ' ' || ch == '\t' {
-                    self.handle_indentation(ch);
+                    self.handle_indentation(ch)?;
                     continue;
                 }
 
@@ -148,7 +163,7 @@ impl<'input> Tokenizer<'input> {
             }
 
             if ch.is_ascii_digit() {
-                self.scan_number(ch);
+                self.scan_number(ch)?;
                 continue;
             }
 
@@ -157,15 +172,15 @@ impl<'input> Tokenizer<'input> {
                 continue;
             }
 
-            if self.scan_operator(ch) {
+            if self.scan_operator(ch)? {
                 continue;
             }
 
-            self.scan_punctuation(ch);
+            self.scan_punctuation(ch)?;
         }
 
         self.finish();
-        self.tokens
+        Ok(self.tokens)
     }
 
     /// Pushes a token into the output stream.
@@ -197,7 +212,7 @@ impl<'input> Tokenizer<'input> {
     /// the indentation changed, and emits `INDENT` or `DEDENT` tokens.
     ///
     /// Blank lines and trailing whitespace at EOF do not affect indentation.
-    fn handle_indentation(&mut self, first: char) {
+    fn handle_indentation(&mut self, first: char) -> Result<(), String> {
         let mut indent_level = Self::indent_width(first);
 
         while let Some(&next_ch) = self.chars.peek() {
@@ -216,7 +231,7 @@ impl<'input> Tokenizer<'input> {
 
         // Blank lines and trailing whitespace at EOF do not affect indentation.
         if self.peek_is('\n') || self.peek_is_none() {
-            return;
+            return Ok(());
         }
 
         let current_indent = self.current_indent();
@@ -231,11 +246,15 @@ impl<'input> Tokenizer<'input> {
             }
 
             if self.current_indent() != indent_level {
-                Self::indentation_error();
+                return Err(
+                    "IndentationError: unindent does not match any outer indentation level"
+                        .to_string(),
+                );
             }
         }
 
         self.at_line_start = false;
+        Ok(())
     }
 
     /// Returns the width of a single indentation character.
@@ -260,7 +279,7 @@ impl<'input> Tokenizer<'input> {
     /// Scans an integer literal.
     ///
     /// The first digit character has already been consumed.
-    fn scan_number(&mut self, first: char) {
+    fn scan_number(&mut self, first: char) -> Result<(), String> {
         let mut text = String::new();
         text.push(first);
 
@@ -275,9 +294,10 @@ impl<'input> Tokenizer<'input> {
 
         let value = text
             .parse::<i64>()
-            .unwrap_or_else(|_| Self::invalid_number(&text));
+            .map_err(|_| format!("SyntaxError: invalid integer literal: {}", text))?;
 
         self.push(Token::Number(value));
+        Ok(())
     }
 
     /// Scans an identifier or keyword.
@@ -305,8 +325,8 @@ impl<'input> Tokenizer<'input> {
     /// Tries to scan a multi-character or single-character operator.
     ///
     /// Returns `true` if the character was handled as an operator.
-    fn scan_operator(&mut self, ch: char) -> bool {
-        match ch {
+    fn scan_operator(&mut self, ch: char) -> Result<bool, String> {
+        Ok(match ch {
             '<' => {
                 if self.peek_is('=') {
                     self.chars.next();
@@ -339,18 +359,18 @@ impl<'input> Tokenizer<'input> {
                     self.chars.next();
                     self.push(Token::NotEq);
                 } else {
-                    Self::unknown_token(ch);
+                    return Err(format!("SyntaxError: unknown token: {}", ch));
                 }
                 true
             }
             _ => false,
-        }
+        })
     }
 
     /// Scans a single-character punctuation token.
     ///
     /// Unknown characters are treated as syntax errors.
-    fn scan_punctuation(&mut self, ch: char) {
+    fn scan_punctuation(&mut self, ch: char) -> Result<(), String> {
         let token = match ch {
             '+' => Token::Plus,
             '-' => Token::Minus,
@@ -359,10 +379,11 @@ impl<'input> Tokenizer<'input> {
             '(' => Token::LParen,
             ')' => Token::RParen,
             ':' => Token::Colon,
-            _ => Self::unknown_token(ch),
+            _ => return Err(format!("SyntaxError: unknown token: {}", ch)),
         };
 
         self.push(token);
+        Ok(())
     }
 
     /// Finalizes the token stream.
@@ -382,30 +403,6 @@ impl<'input> Tokenizer<'input> {
         }
 
         self.push(Token::Eof);
-    }
-
-    /// Reports an indentation mismatch.
-    ///
-    /// This is kept as a panic for backward compatibility. A production-grade
-    /// implementation should return a `Result` with a structured diagnostic.
-    fn indentation_error() -> ! {
-        panic!("IndentationError: unindent does not match any outer indentation level");
-    }
-
-    /// Reports an unknown token.
-    ///
-    /// This is kept as a panic for backward compatibility. A production-grade
-    /// implementation should return a `Result` with a structured diagnostic.
-    fn unknown_token(ch: char) -> ! {
-        panic!("SyntaxError: unknown token: {}", ch);
-    }
-
-    /// Reports an invalid or overflowing integer literal.
-    ///
-    /// This is kept as a panic for backward compatibility. A production-grade
-    /// implementation should return a `Result` with a structured diagnostic.
-    fn invalid_number(text: &str) -> ! {
-        panic!("SyntaxError: invalid integer literal: {}", text);
     }
 }
 

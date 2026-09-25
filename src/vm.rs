@@ -48,6 +48,8 @@ impl CallFrame {
 pub struct VM {
     /// The operand stack for intermediate values.
     stack: Vec<Object>,
+    /// Last expression statement evaluated in the current run.
+    result: Object,
     /// A stack of call frames. The last element is the current frame.
     frames: Vec<CallFrame>,
     /// Global variables indexed by symbol ID.
@@ -65,21 +67,23 @@ impl VM {
     pub fn new() -> Self {
         VM {
             stack: Vec::new(),
+            result: Object::None,
             frames: vec![CallFrame::new(0, 0)],
             globals: HashMap::new(),
         }
     }
 
-    /// Returns a mutable reference to the current (topmost) call frame.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the frame stack is empty, which should never happen since
-    /// the global frame is always present.
-    fn current_frame(&mut self) -> &mut CallFrame {
+    /// Resolves a lexical address without permitting an invalid frame index.
+    fn local_frame(&mut self, depth: usize) -> Result<&mut CallFrame, String> {
+        let index = self
+            .frames
+            .len()
+            .checked_sub(depth)
+            .and_then(|n| n.checked_sub(1))
+            .ok_or("SystemError: local frame depth out of bounds")?;
         self.frames
-            .last_mut()
-            .expect("frame stack should never be empty")
+            .get_mut(index)
+            .ok_or_else(|| "SystemError: local frame depth out of bounds".to_string())
     }
 
     /// Executes a sequence of bytecode instructions and returns the final result.
@@ -87,8 +91,28 @@ impl VM {
     /// The VM processes instructions sequentially, maintaining an instruction
     /// pointer that advances after each instruction unless modified by a jump.
     ///
+    /// Failed runs roll back all global writes. Operands and temporary frames are
+    /// discarded on every exit; the result is the last executed expression statement.
+    ///
     /// If `debug` is true, the VM prints the state after each instruction.
     pub fn run(
+        &mut self,
+        bytecode: &[Instruction],
+        interner: &Interner,
+        debug: bool,
+    ) -> Result<Object, String> {
+        let globals = self.globals.clone();
+        let outcome = self.run_instructions(bytecode, interner, debug);
+        self.stack.clear();
+        self.frames.truncate(1);
+        self.result = Object::None;
+        if outcome.is_err() {
+            self.globals = globals;
+        }
+        outcome
+    }
+
+    fn run_instructions(
         &mut self,
         bytecode: &[Instruction],
         interner: &Interner,
@@ -128,7 +152,7 @@ impl VM {
             }
         }
 
-        Ok(self.stack.pop().unwrap_or(Object::None))
+        Ok(self.stack.pop().unwrap_or_else(|| self.result.clone()))
     }
 
     /// Executes a single instruction.
@@ -154,11 +178,22 @@ impl VM {
             }
 
             Instruction::LoadLocal(slot) => {
-                self.execute_load_local(*slot)?;
+                self.execute_load_local(0, *slot)?;
             }
 
             Instruction::StoreLocal(slot) => {
-                self.execute_store_local(*slot)?;
+                self.execute_store_local(0, *slot)?;
+            }
+
+            Instruction::LoadEnclosing { depth, slot } => self.execute_load_local(*depth, *slot)?,
+            Instruction::StoreEnclosing { depth, slot } => {
+                self.execute_store_local(*depth, *slot)?
+            }
+            Instruction::SetResult => {
+                self.result = self
+                    .stack
+                    .pop()
+                    .ok_or("SystemError: stack underflow at SET_RESULT")?;
             }
 
             Instruction::EnterBlock(num_locals) => {
@@ -212,9 +247,8 @@ impl VM {
     fn execute_store_name(&mut self, sym_id: SymbolId) -> Result<(), String> {
         let value = self
             .stack
-            .last()
-            .ok_or("SystemError: stack underflow at STORE_NAME")?
-            .clone();
+            .pop()
+            .ok_or("SystemError: stack underflow at STORE_NAME")?;
         self.globals.insert(sym_id, value);
         Ok(())
     }
@@ -222,8 +256,8 @@ impl VM {
     /// Executes a LOAD_LOCAL instruction.
     ///
     /// Loads a local variable by slot index and pushes it onto the stack.
-    fn execute_load_local(&mut self, slot: usize) -> Result<(), String> {
-        let frame = self.current_frame();
+    fn execute_load_local(&mut self, depth: usize, slot: usize) -> Result<(), String> {
+        let frame = self.local_frame(depth)?;
         if slot >= frame.locals.len() {
             return Err(format!("SystemError: local slot {} out of bounds", slot));
         }
@@ -235,13 +269,13 @@ impl VM {
     /// Executes a STORE_LOCAL instruction.
     ///
     /// Pops a value from the stack and stores it in a local variable slot.
-    fn execute_store_local(&mut self, slot: usize) -> Result<(), String> {
+    fn execute_store_local(&mut self, depth: usize, slot: usize) -> Result<(), String> {
         let value = self
             .stack
             .pop()
             .ok_or("SystemError: stack underflow at STORE_LOCAL")?;
 
-        let frame = self.current_frame();
+        let frame = self.local_frame(depth)?;
         if slot >= frame.locals.len() {
             return Err(format!("SystemError: local slot {} out of bounds", slot));
         }

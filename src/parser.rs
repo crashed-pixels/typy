@@ -178,6 +178,19 @@ impl Parser {
     ///           | expression
     /// ```
     fn parse_statement(&mut self) -> Result<Stmt, String> {
+        let stmt = self.parse_statement_inner()?;
+        if !matches!(stmt, Stmt::If { .. })
+            && !matches!(self.current(), Token::NewLine | Token::Eof)
+        {
+            return Err(format!(
+                "SyntaxError: expected newline, but got {:?}",
+                self.current()
+            ));
+        }
+        Ok(stmt)
+    }
+
+    fn parse_statement_inner(&mut self) -> Result<Stmt, String> {
         // Try to parse an if statement
         if self.current() == &Token::If {
             return self.parse_if_statement();
@@ -290,6 +303,9 @@ impl Parser {
     /// and indent token, and followed by a dedent token.
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
         self.eat(Token::NewLine)?;
+        while self.current() == &Token::NewLine {
+            self.pos += 1;
+        }
         self.eat(Token::Indent)?;
 
         let mut stmts = Vec::new();

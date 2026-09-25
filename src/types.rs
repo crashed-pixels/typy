@@ -35,6 +35,7 @@ impl Type {
 ///
 /// Variables must be declared before use, and assignments must match the
 /// declared type.
+#[derive(Clone)]
 pub struct TypeChecker {
     /// A stack of lexical scopes, each mapping symbol IDs to types.
     /// The last element is the current (innermost) scope.
@@ -111,11 +112,13 @@ impl TypeChecker {
     /// Type-checks a list of statements.
     ///
     /// This is the main entry point for type checking. It processes each
-    /// statement in order and returns an error if any statement is ill-typed.
+    /// statement in order. On error, all declarations and scopes are unchanged.
     pub fn check(&mut self, stmts: &[Stmt], interner: &mut Interner) -> Result<(), String> {
+        let mut candidate = self.clone();
         for stmt in stmts {
-            self.check_stmt(stmt, interner)?;
+            candidate.check_stmt(stmt, interner)?;
         }
+        *self = candidate;
         Ok(())
     }
 
@@ -220,11 +223,11 @@ impl TypeChecker {
     /// if/elif/else branches.
     fn check_block(&mut self, stmts: &[Stmt], interner: &mut Interner) -> Result<(), String> {
         self.enter_block();
-        for stmt in stmts {
-            self.check_stmt(stmt, interner)?;
-        }
+        let result = stmts
+            .iter()
+            .try_for_each(|stmt| self.check_stmt(stmt, interner));
         self.exit_block();
-        Ok(())
+        result
     }
 
     /// Type-checks an expression and returns its type.
@@ -252,8 +255,8 @@ impl TypeChecker {
     /// Type-checks a binary operation.
     ///
     /// Arithmetic operators require both operands to be integers and produce
-    /// an integer result. Comparison operators require both operands to have
-    /// the same type and produce a boolean result.
+    /// an integer result. Equality requires matching types; ordering requires
+    /// integers. Both kinds of comparison produce a boolean result.
     fn check_binary_op(&self, op: Operator, l_type: Type, r_type: Type) -> Result<Type, String> {
         match op {
             // Arithmetic operators
@@ -276,7 +279,8 @@ impl TypeChecker {
             | Operator::Greater
             | Operator::LessEq
             | Operator::GreaterEq => {
-                if l_type == r_type {
+                let equality = matches!(op, Operator::Eq | Operator::NotEq);
+                if l_type == r_type && (equality || l_type == Type::Int) {
                     Ok(Type::Bool)
                 } else {
                     Err(format!(

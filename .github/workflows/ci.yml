@@ -41,6 +41,9 @@ jobs:
       - name: Run tests
         run: cargo test --locked --all-features --verbose
 
+      - name: Run release tests
+        run: cargo test --release --locked --all-features
+
       - name: Build debug binary
         run: cargo build --locked --verbose
 
