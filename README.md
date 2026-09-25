@@ -80,3 +80,23 @@ Before submitting a PR, ensure your code passes:
 4. Built `cargo build --locked --verbose`
 
 You can use `just` for quick check `$ just check-all`
+
+## Execution semantics
+
+- `int` is a signed 64-bit integer. Arithmetic overflow raises `OverflowError`
+  in both debug and release builds; division by zero raises `ZeroDivisionError`.
+- Variables declared in a block are lexical locals. Nested blocks read and write
+  the nearest declaration, and a shadowing declaration does not modify globals.
+- Each REPL submission is atomic: a type or runtime error leaves existing global
+  values and declarations unchanged, including writes before the failing statement.
+  A failed initializer can be retried. Interned symbol IDs remain allocated.
+- The displayed result is the last expression statement actually executed in the
+  submission. Assignments and declarations are silent. Empty submissions have no
+  result; operand values and temporary block frames do not survive a run.
+- Equality supports matching `int` or `bool` operands; ordering requires `int`.
+- Simple statements require newlines. Blank lines in files do not affect block
+  indentation; LF and CRLF are equivalent. A blank line submits a REPL block;
+  EOF executes pending input (or reports a syntax error if it is incomplete).
+- Library clients handling untrusted source should use
+  `tokenizer::try_tokenize_str`, which returns `Result`. The legacy `tokenize`
+  and `tokenize_str` wrappers retain their panic-on-error behavior.

@@ -22,18 +22,36 @@ fn run(source: &str) -> Result<Object, String> {
 
 fn repl(source: &str, debug: bool) -> (String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_typy"));
-    if debug { command.arg("--debug"); }
-    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+    if debug {
+        command.arg("--debug");
+    }
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(source.as_bytes())
+        .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{:?}", output);
-    (String::from_utf8(output.stdout).unwrap(), String::from_utf8(output.stderr).unwrap())
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
 }
 
 fn values(stdout: &str) -> Vec<&str> {
-    stdout.lines().map(|line| line.trim_start_matches(">>> ").trim_start_matches("... "))
+    stdout
+        .lines()
         .map(|line| line.trim_start_matches(">>> ").trim_start_matches("... "))
-        .filter(|line| line.parse::<i64>().is_ok() || *line == "True" || *line == "False").collect()
+        .map(|line| line.trim_start_matches(">>> ").trim_start_matches("... "))
+        .filter(|line| line.parse::<i64>().is_ok() || *line == "True" || *line == "False")
+        .collect()
 }
 
 #[test]
@@ -48,12 +66,23 @@ fn enclosing_local_reads_and_writes_preserve_global() {
 fn failed_check_rolls_back_scopes_and_declarations() {
     let mut checker = TypeChecker::new();
     let mut interner = Interner::new();
-    checker.check(&parse("x: int = 1\n"), &mut interner).unwrap();
+    checker
+        .check(&parse("x: int = 1\n"), &mut interner)
+        .unwrap();
     for _ in 0..3 {
-        assert!(checker.check(&parse("y: int = 2\nif True:\n    x: bool = True\n    1 + True\n"), &mut interner).is_err());
+        assert!(
+            checker
+                .check(
+                    &parse("y: int = 2\nif True:\n    x: bool = True\n    1 + True\n"),
+                    &mut interner
+                )
+                .is_err()
+        );
         assert!(checker.check(&parse("x = False\n"), &mut interner).is_err());
     }
-    checker.check(&parse("y: int = 3\nx = 2\n"), &mut interner).unwrap();
+    checker
+        .check(&parse("y: int = 3\nx = 2\n"), &mut interner)
+        .unwrap();
 }
 
 #[test]
@@ -75,10 +104,34 @@ fn repl_failed_block_rolls_back_executed_assignments() {
 fn vm_cleans_operands_after_success_and_errors() {
     let mut vm = VM::new();
     let interner = Interner::new();
-    assert_eq!(vm.run(&[Instruction::LoadConst(Object::Int(11)), Instruction::LoadConst(Object::Int(22))], &interner, false).unwrap(), Object::Int(22));
+    assert_eq!(
+        vm.run(
+            &[
+                Instruction::LoadConst(Object::Int(11)),
+                Instruction::LoadConst(Object::Int(22))
+            ],
+            &interner,
+            false
+        )
+        .unwrap(),
+        Object::Int(22)
+    );
     assert_eq!(vm.run(&[], &interner, false).unwrap(), Object::None);
     for _ in 0..3 {
-        assert!(vm.run(&[Instruction::EnterBlock(0), Instruction::LoadConst(Object::Int(11)), Instruction::LoadConst(Object::Int(1)), Instruction::LoadConst(Object::Int(0)), Instruction::Divide], &interner, false).is_err());
+        assert!(
+            vm.run(
+                &[
+                    Instruction::EnterBlock(0),
+                    Instruction::LoadConst(Object::Int(11)),
+                    Instruction::LoadConst(Object::Int(1)),
+                    Instruction::LoadConst(Object::Int(0)),
+                    Instruction::Divide
+                ],
+                &interner,
+                false
+            )
+            .is_err()
+        );
         assert_eq!(vm.run(&[], &interner, false).unwrap(), Object::None);
         assert!(vm.run(&[Instruction::ExitBlock], &interner, false).is_err());
     }
@@ -86,16 +139,35 @@ fn vm_cleans_operands_after_success_and_errors() {
 
 #[test]
 fn overflow_is_a_language_error() {
-    for source in ["9223372036854775807 + 1", "(0 - 9223372036854775807 - 1) - 1", "9223372036854775807 * 2", "(0 - 9223372036854775807 - 1) / (0 - 1)"] {
-        assert!(run(source).unwrap_err().contains("OverflowError"), "{source}");
+    for source in [
+        "9223372036854775807 + 1",
+        "(0 - 9223372036854775807 - 1) - 1",
+        "9223372036854775807 * 2",
+        "(0 - 9223372036854775807 - 1) / (0 - 1)",
+    ] {
+        assert!(
+            run(source).unwrap_err().contains("OverflowError"),
+            "{source}"
+        );
     }
-    assert_eq!(run("9223372036854775807 + 0").unwrap(), Object::Int(i64::MAX));
-    assert_eq!(run("(0 - 9223372036854775807 - 1) / 1").unwrap(), Object::Int(i64::MIN));
+    assert_eq!(
+        run("9223372036854775807 + 0").unwrap(),
+        Object::Int(i64::MAX)
+    );
+    assert_eq!(
+        run("(0 - 9223372036854775807 - 1) / 1").unwrap(),
+        Object::Int(i64::MIN)
+    );
 }
 
 #[test]
 fn repl_recovers_from_lexical_errors() {
-    for source in ["@\n42\n", "!\n42\n", "9223372036854775808\n42\n", "if True:\n    1\n  2\n\n42\n"] {
+    for source in [
+        "@\n42\n",
+        "!\n42\n",
+        "9223372036854775808\n42\n",
+        "if True:\n    1\n  2\n\n42\n",
+    ] {
         let (out, err) = repl(source, false);
         assert!(err.contains("Error:"), "{err}");
         assert_eq!(values(&out).last(), Some(&"42"), "{out}");
@@ -106,7 +178,11 @@ fn repl_recovers_from_lexical_errors() {
 fn boolean_ordering_is_rejected_statically() {
     for op in ["<", ">", "<=", ">="] {
         let mut checker = TypeChecker::new();
-        assert!(checker.check(&parse(&format!("True {op} False")), &mut Interner::new()).is_err());
+        assert!(
+            checker
+                .check(&parse(&format!("True {op} False")), &mut Interner::new())
+                .is_err()
+        );
     }
     assert_eq!(run("True == False").unwrap(), Object::Bool(false));
     assert_eq!(run("True != False").unwrap(), Object::Bool(true));
@@ -114,8 +190,16 @@ fn boolean_ordering_is_rejected_statically() {
 
 #[test]
 fn adjacent_statements_require_newlines() {
-    for source in ["1 2", "x: int = 1 y: int = 2", "if True:\n    1 2\n", "if True:\n    x: int = 1 x = 2\n"] {
-        assert!(Parser::new(tokenize_str(source)).parse().is_err(), "{source}");
+    for source in [
+        "1 2",
+        "x: int = 1 y: int = 2",
+        "if True:\n    1 2\n",
+        "if True:\n    x: int = 1 x = 2\n",
+    ] {
+        assert!(
+            Parser::new(tokenize_str(source)).parse().is_err(),
+            "{source}"
+        );
     }
 }
 
@@ -123,7 +207,8 @@ fn adjacent_statements_require_newlines() {
 fn blank_lines_preserve_block_structure() {
     for newline in ["\n", "\r\n"] {
         for blank in ["", "    ", "\t"] {
-            let source = format!("if True:\n{blank}\n    1\n{blank}\n    42\n").replace('\n', newline);
+            let source =
+                format!("if True:\n{blank}\n    1\n{blank}\n    42\n").replace('\n', newline);
             assert_eq!(run(&source).unwrap(), Object::Int(42));
         }
     }
@@ -145,7 +230,10 @@ fn repl_preserves_consecutive_block_headers() {
 
 #[test]
 fn repl_scope_errors_do_not_change_global_type() {
-    let (out, err) = repl("x: int = 1\nif True:\n    x: bool = True\n    1 + True\n\nx = False\nx\n", false);
+    let (out, err) = repl(
+        "x: int = 1\nif True:\n    x: bool = True\n    1 + True\n\nx = False\nx\n",
+        false,
+    );
     assert_eq!(err.lines().count(), 2, "{err}");
     assert_eq!(values(&out).last(), Some(&"1"), "{out}");
 }
@@ -161,13 +249,19 @@ fn repl_empty_submission_has_no_stale_value() {
 fn repl_unwinds_failed_frames() {
     let (out, err) = repl("if True:\n    1 / 0\n\n42\n", true);
     assert!(err.contains("ZeroDivisionError"));
-    let state = out.lines().find(|line| line.contains("LoadConst(Int(42)) | Stack")).unwrap();
+    let state = out
+        .lines()
+        .find(|line| line.contains("LoadConst(Int(42)) | Stack"))
+        .unwrap();
     assert!(state.contains("Frames (1)"), "{state}");
 }
 
 #[test]
 fn repl_keeps_elif_else_and_dedented_expressions() {
-    let (out, err) = repl("if False:\n    1\nelif False:\n    2\nelse:\n    3\n42\n", false);
+    let (out, err) = repl(
+        "if False:\n    1\nelif False:\n    2\nelse:\n    3\n42\n",
+        false,
+    );
     assert!(err.is_empty(), "{err}");
     assert_eq!(values(&out), ["3", "42"], "{out}");
 }
@@ -176,10 +270,17 @@ fn repl_keeps_elif_else_and_dedented_expressions() {
 fn file_lexical_error_has_normal_exit_status() {
     let path = std::env::temp_dir().join(format!("typy_issue_five_{}.tp", std::process::id()));
     std::fs::write(&path, "@\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_typy")).arg(&path).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_typy"))
+        .arg(&path)
+        .output()
+        .unwrap();
     std::fs::remove_file(path).unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8(output.stderr).unwrap().contains("SyntaxError"));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("SyntaxError")
+    );
 }
 
 #[test]

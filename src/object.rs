@@ -43,21 +43,21 @@ impl Object {
     ///
     /// Returns an error if either operand is not an integer.
     pub fn add(&self, other: &Object) -> Result<Object, String> {
-        self.arithmetic_op("+", other, |a, b| a + b)
+        self.arithmetic_op("+", other, i64::checked_add)
     }
 
     /// Performs subtraction on two objects.
     ///
     /// Returns an error if either operand is not an integer.
     pub fn sub(&self, other: &Object) -> Result<Object, String> {
-        self.arithmetic_op("-", other, |a, b| a - b)
+        self.arithmetic_op("-", other, i64::checked_sub)
     }
 
     /// Performs multiplication on two objects.
     ///
     /// Returns an error if either operand is not an integer.
     pub fn mul(&self, other: &Object) -> Result<Object, String> {
-        self.arithmetic_op("*", other, |a, b| a * b)
+        self.arithmetic_op("*", other, i64::checked_mul)
     }
 
     /// Performs division on two objects.
@@ -66,11 +66,11 @@ impl Object {
     /// divisor is zero.
     pub fn div(&self, other: &Object) -> Result<Object, String> {
         match (self, other) {
-            (Object::Int(a), Object::Int(b)) => {
+            (Object::Int(_), Object::Int(b)) => {
                 if *b == 0 {
                     Err("ZeroDivisionError: division by zero".to_string())
                 } else {
-                    Ok(Object::Int(a / b))
+                    self.arithmetic_op("/", other, i64::checked_div)
                 }
             }
             _ => Err(Self::binary_op_error("/", self, other)),
@@ -124,10 +124,12 @@ impl Object {
     /// This eliminates duplication across add, sub, and mul methods.
     fn arithmetic_op<F>(&self, operator: &str, other: &Object, op: F) -> Result<Object, String>
     where
-        F: FnOnce(i64, i64) -> i64,
+        F: FnOnce(i64, i64) -> Option<i64>,
     {
         match (self, other) {
-            (Object::Int(a), Object::Int(b)) => Ok(Object::Int(op(*a, *b))),
+            (Object::Int(a), Object::Int(b)) => op(*a, *b)
+                .map(Object::Int)
+                .ok_or_else(|| format!("OverflowError: integer overflow in '{}'", operator)),
             _ => Err(Self::binary_op_error(operator, self, other)),
         }
     }

@@ -15,16 +15,18 @@ fn compile(input: &str) -> Vec<Instruction> {
 fn compiles_number_literal() {
     let code = compile("42\n");
 
-    assert_eq!(code.len(), 1);
+    assert_eq!(code.len(), 2);
     assert_eq!(code[0], Instruction::LoadConst(Object::Int(42)));
+    assert_eq!(code[1], Instruction::SetResult);
 }
 
 #[test]
 fn compiles_bool_literal() {
     let code = compile("True\n");
 
-    assert_eq!(code.len(), 1);
+    assert_eq!(code.len(), 2);
     assert_eq!(code[0], Instruction::LoadConst(Object::Bool(true)));
+    assert_eq!(code[1], Instruction::SetResult);
 }
 
 #[test]

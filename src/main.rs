@@ -1,23 +1,15 @@
-mod compiler;
-mod object;
-mod parser;
-mod symbol;
-mod tokenizer;
-mod types;
-mod vm;
-
-use compiler::Compiler;
-use object::Object;
-use parser::Parser;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process;
-use symbol::Interner;
-use tokenizer::tokenize;
-use types::TypeChecker;
-use vm::VM;
+use typy::compiler::Compiler;
+use typy::object::Object;
+use typy::parser::Parser;
+use typy::symbol::Interner;
+use typy::tokenizer::try_tokenize_str;
+use typy::types::TypeChecker;
+use typy::vm::VM;
 
 /// Configuration for the TyPy interpreter.
 ///
@@ -193,37 +185,41 @@ fn execute_file(
     let source =
         fs::read_to_string(path).map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
 
+    execute_source(&source, vm, interner, type_checker, debug)
+}
+
+/// Checks and executes one atomic submission. The checker is committed only
+/// after the VM succeeds; the VM rolls back its own globals on failure.
+fn execute_source(
+    source: &str,
+    vm: &mut VM,
+    interner: &mut Interner,
+    type_checker: &mut TypeChecker,
+    debug: bool,
+) -> Result<(), String> {
     if debug {
         println!("[0] Source:\n{}", source);
     }
-
-    let tokens = tokenize(source);
+    let tokens = try_tokenize_str(source)?;
     if debug {
         println!("[1] Tokens: {:?}", tokens);
     }
-
-    let mut parser = Parser::new(tokens);
-    let ast = parser.parse()?;
-
+    let ast = Parser::new(tokens).parse()?;
     if debug {
         println!("\n[2] AST: {:#?}", ast);
     }
-
-    type_checker.check(&ast, interner)?;
-
-    let compiler = Compiler::new();
-    let bytecode = compiler.compile(&ast, interner);
-
+    let mut candidate = type_checker.clone();
+    candidate.check(&ast, interner)?;
+    let bytecode = Compiler::new().compile(&ast, interner);
     if debug {
         println!("\n[3] Byte-code: {:?}", bytecode);
         println!("\n[4] Running:");
     }
-
-    match vm.run(&bytecode, interner, debug)? {
-        Object::None => {}
-        result => println!("{}", result),
+    let result = vm.run(&bytecode, interner, debug)?;
+    *type_checker = candidate;
+    if result != Object::None {
+        println!("{}", result);
     }
-
     Ok(())
 }
 
@@ -233,80 +229,39 @@ fn execute_file(
 /// and executes it. It continues until EOF (Ctrl+D) is received.
 fn run_repl(vm: &mut VM, interner: &mut Interner, type_checker: &mut TypeChecker, debug: bool) {
     println!("=== TyPy (v {}) ===", env!("CARGO_PKG_VERSION"));
-    loop {
-        let mut source_buffer = Vec::new();
+    let mut pending = None;
+    let mut eof = false;
+    while !eof {
+        let mut source = String::new();
         let mut in_block = false;
-
-        // Read input (potentially multi-line for blocks)
         loop {
-            let prompt = if in_block { "... " } else { ">>> " };
-            let line = read_line(prompt);
-
-            // EOF (empty line) exits the REPL
+            let line = pending
+                .take()
+                .unwrap_or_else(|| read_line(if in_block { "... " } else { ">>> " }));
             if line.is_empty() {
+                eof = true;
                 println!();
-                return;
+                break;
             }
-
-            source_buffer.push(line.clone());
-
+            if in_block && is_block_end(&line) {
+                if !line.trim().is_empty() {
+                    pending = Some(line);
+                }
+                break;
+            }
+            source.push_str(&line);
             if !in_block {
                 if needs_block(&line) {
                     in_block = true;
                 } else {
                     break;
                 }
-            } else {
-                if is_block_end(&line) {
-                    break;
-                }
             }
         }
-
-        let source = source_buffer.join("");
-
-        // Tokenize
-        let tokens = tokenize(source);
-        if debug {
-            println!("[1] Tokens: {:?}", tokens);
-        }
-
-        // Parse
-        let mut parser = Parser::new(tokens);
-        let ast = match parser.parse() {
-            Ok(ast) => ast,
-            Err(e) => {
-                eprintln!("{}", e);
-                continue;
-            }
-        };
-
-        if debug {
-            println!("\n[2] AST: {:#?}", ast);
-        }
-
-        // Type check
-        match type_checker.check(&ast, interner) {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("{}", e);
-                continue;
-            }
-        }
-
-        // Compile
-        let compiler = Compiler::new();
-        let bytecode = compiler.compile(&ast, interner);
-        if debug {
-            println!("\n[3] Byte-code: {:?}", bytecode);
-            println!("\n[4] Running:");
-        }
-
-        // Execute
-        match vm.run(&bytecode, interner, debug) {
-            Ok(Object::None) => {}
-            Ok(result) => println!("{}", result),
-            Err(e) => eprintln!("{}", e),
+        if !source.trim().is_empty()
+            && let Err(error) = execute_source(&source, vm, interner, type_checker, debug)
+        {
+            eprintln!("{}", error);
         }
     }
 }

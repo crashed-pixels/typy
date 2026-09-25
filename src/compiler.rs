@@ -26,6 +26,15 @@ pub enum Instruction {
     /// Pops a value from the stack and stores it in a local variable slot.
     StoreLocal(usize),
 
+    /// Loads a local in an enclosing block (`depth` frames outward).
+    LoadEnclosing { depth: usize, slot: usize },
+
+    /// Stores a local in an enclosing block (`depth` frames outward).
+    StoreEnclosing { depth: usize, slot: usize },
+
+    /// Pops an expression statement's value into the run's result register.
+    SetResult,
+
     /// Enters a new block with the specified number of local variables.
     /// The VM allocates space for these locals on the call stack.
     EnterBlock(usize),
@@ -160,17 +169,6 @@ impl Compiler {
             .expect("scope stack should never be empty")
     }
 
-    /// Returns a reference to the current (innermost) scope.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the scope stack is empty, which should never happen.
-    fn current_scope(&self) -> &CompilerScope {
-        self.scopes
-            .last()
-            .expect("scope stack should never be empty")
-    }
-
     /// Enters a new nested scope.
     fn enter_scope(&mut self) {
         self.scopes.push(CompilerScope { locals: Vec::new() });
@@ -189,12 +187,20 @@ impl Compiler {
         index
     }
 
-    /// Resolves a symbol to a local variable slot in the current scope.
-    ///
-    /// Returns `None` if the symbol is not declared as a local in this scope.
-    fn resolve_local(&self, sym_id: SymbolId) -> Option<usize> {
-        let scope = self.current_scope();
-        scope.locals.iter().position(|&id| id == sym_id)
+    /// Resolves the nearest local to its lexical depth and slot, excluding globals.
+    fn resolve_local(&self, sym_id: SymbolId) -> Option<(usize, usize)> {
+        self.scopes
+            .iter()
+            .skip(1)
+            .rev()
+            .enumerate()
+            .find_map(|(depth, scope)| {
+                scope
+                    .locals
+                    .iter()
+                    .position(|&id| id == sym_id)
+                    .map(|slot| (depth, slot))
+            })
     }
 
     /// Returns true if the compiler is currently inside a nested block.
@@ -258,6 +264,7 @@ impl Compiler {
         match stmt {
             Stmt::Expr(expr) => {
                 self.compile_expr(expr, interner);
+                self.emit(Instruction::SetResult);
             }
 
             Stmt::VariableDecl {
@@ -292,8 +299,12 @@ impl Compiler {
                 let sym_id = interner.intern(name);
 
                 // Store the value in the appropriate location
-                if let Some(slot) = self.resolve_local(sym_id) {
-                    self.emit(Instruction::StoreLocal(slot));
+                if let Some((depth, slot)) = self.resolve_local(sym_id) {
+                    self.emit(if depth == 0 {
+                        Instruction::StoreLocal(slot)
+                    } else {
+                        Instruction::StoreEnclosing { depth, slot }
+                    });
                 } else {
                     self.emit(Instruction::StoreName(sym_id));
                 }
@@ -380,8 +391,12 @@ impl Compiler {
             Expr::Name(name) => {
                 let sym_id = interner.intern(name);
                 // Try to load as a local first, fall back to global
-                if let Some(slot) = self.resolve_local(sym_id) {
-                    self.emit(Instruction::LoadLocal(slot));
+                if let Some((depth, slot)) = self.resolve_local(sym_id) {
+                    self.emit(if depth == 0 {
+                        Instruction::LoadLocal(slot)
+                    } else {
+                        Instruction::LoadEnclosing { depth, slot }
+                    });
                 } else {
                     self.emit(Instruction::LoadName(sym_id));
                 }
