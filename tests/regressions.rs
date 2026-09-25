@@ -1,4 +1,6 @@
+#[cfg(feature = "cli")]
 use std::io::Write;
+#[cfg(feature = "cli")]
 use std::process::{Command, Stdio};
 use typy::compiler::{Compiler, Instruction};
 use typy::object::Object;
@@ -17,9 +19,10 @@ fn run(source: &str) -> Result<Object, String> {
     let mut interner = Interner::new();
     TypeChecker::new().check(&ast, &mut interner)?;
     let code = Compiler::new().compile(&ast, &mut interner);
-    VM::new().run(&code, &interner, false)
+    VM::new().run(&code, &interner)
 }
 
+#[cfg(feature = "cli")]
 fn repl(source: &str, debug: bool) -> (String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_typy"));
     if debug {
@@ -45,6 +48,7 @@ fn repl(source: &str, debug: bool) -> (String, String) {
     )
 }
 
+#[cfg(feature = "cli")]
 fn values(stdout: &str) -> Vec<&str> {
     stdout
         .lines()
@@ -57,9 +61,9 @@ fn values(stdout: &str) -> Vec<&str> {
 #[test]
 fn enclosing_local_reads_and_writes_preserve_global() {
     let source = "x: int = 100\nif True:\n    x: int = 10\n    if True:\n        x = 20\nx\n";
-    assert_eq!(run(source).unwrap(), Object::Int(100));
-    assert_eq!(run("if True:\n    x: int = 10\n    if True:\n        if True:\n            x = x + 1\n    x\n").unwrap(), Object::Int(11));
-    assert_eq!(run("if True:\n    x: int = 10\n    if True:\n        x: int = x + 1\n        if True:\n            x = x + 1\n        x\n").unwrap(), Object::Int(12));
+    assert_eq!(run(source).unwrap(), Object::int(100));
+    assert_eq!(run("if True:\n    x: int = 10\n    if True:\n        if True:\n            x = x + 1\n    x\n").unwrap(), Object::int(11));
+    assert_eq!(run("if True:\n    x: int = 10\n    if True:\n        x: int = x + 1\n        if True:\n            x = x + 1\n        x\n").unwrap(), Object::int(12));
 }
 
 #[test]
@@ -86,6 +90,7 @@ fn failed_check_rolls_back_scopes_and_declarations() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_failed_initializer_can_be_retried() {
     let (out, err) = repl("x: int = 1 / 0\nx: int = 42\nx\n", false);
     assert_eq!(err.lines().count(), 1, "{err}");
@@ -94,6 +99,7 @@ fn repl_failed_initializer_can_be_retried() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_failed_block_rolls_back_executed_assignments() {
     let (out, err) = repl("x: int = 1\nif True:\n    x = 99\n    1 / 0\n\nx\n", false);
     assert!(err.contains("ZeroDivisionError"));
@@ -107,33 +113,31 @@ fn vm_cleans_operands_after_success_and_errors() {
     assert_eq!(
         vm.run(
             &[
-                Instruction::LoadConst(Object::Int(11)),
-                Instruction::LoadConst(Object::Int(22))
+                Instruction::LoadConst(Object::int(11)),
+                Instruction::LoadConst(Object::int(22))
             ],
             &interner,
-            false
         )
         .unwrap(),
-        Object::Int(22)
+        Object::int(22)
     );
-    assert_eq!(vm.run(&[], &interner, false).unwrap(), Object::None);
+    assert_eq!(vm.run(&[], &interner).unwrap(), Object::none());
     for _ in 0..3 {
         assert!(
             vm.run(
                 &[
                     Instruction::EnterBlock(0),
-                    Instruction::LoadConst(Object::Int(11)),
-                    Instruction::LoadConst(Object::Int(1)),
-                    Instruction::LoadConst(Object::Int(0)),
+                    Instruction::LoadConst(Object::int(11)),
+                    Instruction::LoadConst(Object::int(1)),
+                    Instruction::LoadConst(Object::int(0)),
                     Instruction::Divide
                 ],
                 &interner,
-                false
             )
             .is_err()
         );
-        assert_eq!(vm.run(&[], &interner, false).unwrap(), Object::None);
-        assert!(vm.run(&[Instruction::ExitBlock], &interner, false).is_err());
+        assert_eq!(vm.run(&[], &interner).unwrap(), Object::none());
+        assert!(vm.run(&[Instruction::ExitBlock], &interner).is_err());
     }
 }
 
@@ -152,15 +156,16 @@ fn overflow_is_a_language_error() {
     }
     assert_eq!(
         run("9223372036854775807 + 0").unwrap(),
-        Object::Int(i64::MAX)
+        Object::int(i64::MAX)
     );
     assert_eq!(
         run("(0 - 9223372036854775807 - 1) / 1").unwrap(),
-        Object::Int(i64::MIN)
+        Object::int(i64::MIN)
     );
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_recovers_from_lexical_errors() {
     for source in [
         "@\n42\n",
@@ -184,8 +189,8 @@ fn boolean_ordering_is_rejected_statically() {
                 .is_err()
         );
     }
-    assert_eq!(run("True == False").unwrap(), Object::Bool(false));
-    assert_eq!(run("True != False").unwrap(), Object::Bool(true));
+    assert_eq!(run("True == False").unwrap(), Object::bool(false));
+    assert_eq!(run("True != False").unwrap(), Object::bool(true));
 }
 
 #[test]
@@ -209,12 +214,13 @@ fn blank_lines_preserve_block_structure() {
         for blank in ["", "    ", "\t"] {
             let source =
                 format!("if True:\n{blank}\n    1\n{blank}\n    42\n").replace('\n', newline);
-            assert_eq!(run(&source).unwrap(), Object::Int(42));
+            assert_eq!(run(&source).unwrap(), Object::int(42));
         }
     }
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_executes_pending_block_at_eof() {
     let (out, err) = repl("if True:\n    42\n", false);
     assert!(err.is_empty(), "{err}");
@@ -222,6 +228,7 @@ fn repl_executes_pending_block_at_eof() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_preserves_consecutive_block_headers() {
     let (out, err) = repl("if True:\n    1\nif True:\n    2\n\n", false);
     assert!(err.is_empty(), "{err}");
@@ -229,6 +236,7 @@ fn repl_preserves_consecutive_block_headers() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_scope_errors_do_not_change_global_type() {
     let (out, err) = repl(
         "x: int = 1\nif True:\n    x: bool = True\n    1 + True\n\nx = False\nx\n",
@@ -239,6 +247,7 @@ fn repl_scope_errors_do_not_change_global_type() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_empty_submission_has_no_stale_value() {
     let (out, err) = repl("if True:\n    11\n    22\n\n\n", false);
     assert!(err.is_empty(), "{err}");
@@ -246,6 +255,7 @@ fn repl_empty_submission_has_no_stale_value() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_unwinds_failed_frames() {
     let (out, err) = repl("if True:\n    1 / 0\n\n42\n", true);
     assert!(err.contains("ZeroDivisionError"));
@@ -257,6 +267,7 @@ fn repl_unwinds_failed_frames() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn repl_keeps_elif_else_and_dedented_expressions() {
     let (out, err) = repl(
         "if False:\n    1\nelif False:\n    2\nelse:\n    3\n42\n",
@@ -267,6 +278,7 @@ fn repl_keeps_elif_else_and_dedented_expressions() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn file_lexical_error_has_normal_exit_status() {
     let path = std::env::temp_dir().join(format!("typy_issue_five_{}.tp", std::process::id()));
     std::fs::write(&path, "@\n").unwrap();
@@ -288,18 +300,39 @@ fn vm_rolls_back_all_globals_on_failed_run() {
     let mut vm = VM::new();
     let mut interner = Interner::new();
     let initial = Compiler::new().compile(&parse("x: int = 1"), &mut interner);
-    vm.run(&initial, &interner, false).unwrap();
+    vm.run(&initial, &interner).unwrap();
     let failed = Compiler::new().compile(&parse("y: int = 2\nx = 99\n1 / 0"), &mut interner);
-    assert!(vm.run(&failed, &interner, false).is_err());
+    assert!(vm.run(&failed, &interner).is_err());
     let read_x = Compiler::new().compile(&parse("x"), &mut interner);
-    assert_eq!(vm.run(&read_x, &interner, false).unwrap(), Object::Int(1));
+    assert_eq!(vm.run(&read_x, &interner).unwrap(), Object::int(1));
     let read_y = Compiler::new().compile(&parse("y"), &mut interner);
-    assert!(vm.run(&read_y, &interner, false).is_err());
+    assert!(vm.run(&read_y, &interner).is_err());
 }
 
 #[test]
 fn assignments_are_silent_and_do_not_leave_operands() {
-    assert_eq!(run("x: int = 1\nx = 2").unwrap(), Object::None);
-    assert_eq!(run("11\nx: int = 1\nx = 2").unwrap(), Object::Int(11));
-    assert_eq!(run("11\nif False:\n    22\n").unwrap(), Object::Int(11));
+    assert_eq!(run("x: int = 1\nx = 2").unwrap(), Object::none());
+    assert_eq!(run("11\nx: int = 1\nx = 2").unwrap(), Object::int(11));
+    assert_eq!(run("11\nif False:\n    22\n").unwrap(), Object::int(11));
+}
+
+#[test]
+#[cfg(feature = "cli")]
+fn repl_infers_types_and_recovers_from_inferred_initializer_errors() {
+    let (out, err) = repl("a = 123\na = True\na\nb = 1 / 0\nb = True\nb\n", false);
+    assert_eq!(err.lines().count(), 2, "{err}");
+    assert!(err.contains("TypeError"));
+    assert!(err.contains("ZeroDivisionError"));
+    assert_eq!(values(&out), ["123", "True"], "{out}");
+}
+
+#[test]
+#[cfg(feature = "cli")]
+fn repl_inferred_block_locals_do_not_escape() {
+    let (out, err) = repl(
+        "if True:\n    a = 42\n    if True:\n        a = a + 1\n    a\n\na\n",
+        false,
+    );
+    assert_eq!(values(&out), ["43"], "{out}");
+    assert!(err.contains("NameError"), "{err}");
 }

@@ -1,9 +1,13 @@
-use typy::object::{BOOL_TYPE, INT_TYPE, NONE_TYPE, OBJECT_TYPE, TYPE_TYPE, Object};
+use typy::object::{BOOL_TYPE, INT_TYPE, NONE_TYPE, OBJECT_TYPE, Object, TYPE_TYPE};
 use typy::types::Type;
 
 #[test]
 fn builtins_have_shared_type_objects_and_a_metatype() {
-    for (object, typ) in [(Object::int(1), &INT_TYPE), (Object::bool(true), &BOOL_TYPE), (Object::none(), &NONE_TYPE)] {
+    for (object, typ) in [
+        (Object::int(1), &INT_TYPE),
+        (Object::bool(true), &BOOL_TYPE),
+        (Object::none(), &NONE_TYPE),
+    ] {
         assert!(core::ptr::eq(object.type_object(), typ));
         assert!(core::ptr::eq(typ.header().type_object(), &TYPE_TYPE));
         assert!(core::ptr::eq(typ.base().unwrap(), &OBJECT_TYPE));

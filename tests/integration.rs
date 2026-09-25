@@ -1,5 +1,4 @@
 use typy::compiler::Compiler;
-use typy::object::Object;
 use typy::parser::Parser;
 use typy::symbol::Interner;
 use typy::tokenizer::tokenize;
@@ -21,8 +20,7 @@ fn execute_program(source: &str) -> String {
     let bytecode = compiler.compile(&stmts, &mut interner);
 
     let mut vm = VM::new();
-    match vm.run(&bytecode, &interner, false) {
-        Ok(Object::None) => "None".to_string(),
+    match vm.run(&bytecode, &interner) {
         Ok(result) => format!("{}", result),
         Err(e) => e.to_string(),
     }

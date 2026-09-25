@@ -4,7 +4,6 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process;
 use typy::compiler::Compiler;
-use typy::object::Object;
 use typy::parser::Parser;
 use typy::symbol::Interner;
 use typy::tokenizer::try_tokenize_str;
@@ -209,15 +208,19 @@ fn execute_source(
         println!("\n[2] AST: {:#?}", ast);
     }
     let mut candidate = type_checker.clone();
-    candidate.check(&ast, interner)?;
+    let ast = candidate.check_and_resolve(&ast, interner)?;
     let bytecode = Compiler::new().compile(&ast, interner);
     if debug {
         println!("\n[3] Byte-code: {:?}", bytecode);
         println!("\n[4] Running:");
     }
-    let result = vm.run(&bytecode, interner, debug)?;
+    let result = vm.run_with_trace(&bytecode, interner, |event| {
+        if debug {
+            println!("{event}");
+        }
+    })?;
     *type_checker = candidate;
-    if result != Object::None {
+    if !result.is_none() {
         println!("{}", result);
     }
     Ok(())

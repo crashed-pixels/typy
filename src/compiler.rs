@@ -2,7 +2,7 @@ use crate::object::Object;
 use crate::parser::{Expr, Operator, Stmt};
 use crate::symbol::{Interner, SymbolId};
 use crate::types::Type;
-use std::collections::HashSet;
+use alloc::{collections::BTreeSet, vec, vec::Vec};
 
 /// A bytecode instruction for the virtual machine.
 ///
@@ -213,7 +213,7 @@ impl Compiler {
     /// This is used to determine how much space to allocate for locals
     /// when entering the block.
     fn count_block_locals(&self, stmts: &[Stmt], interner: &mut Interner) -> usize {
-        let mut seen = HashSet::new();
+        let mut seen = BTreeSet::new();
         for stmt in stmts {
             if let Stmt::VariableDecl { name, .. } = stmt {
                 let sym_id = interner.intern(name);
@@ -280,8 +280,8 @@ impl Compiler {
                 } else {
                     // Emit a default value based on the declared type
                     match typ {
-                        Type::Int => self.emit(Instruction::LoadConst(Object::Int(0))),
-                        Type::Bool => self.emit(Instruction::LoadConst(Object::Bool(false))),
+                        Type::Int => self.emit(Instruction::LoadConst(Object::int(0))),
+                        Type::Bool => self.emit(Instruction::LoadConst(Object::bool(false))),
                     }
                 }
 
@@ -383,10 +383,10 @@ impl Compiler {
     fn compile_expr(&mut self, expr: &Expr, interner: &mut Interner) {
         match expr {
             Expr::Number(n) => {
-                self.emit(Instruction::LoadConst(Object::Int(*n)));
+                self.emit(Instruction::LoadConst(Object::int(*n)));
             }
             Expr::Bool(b) => {
-                self.emit(Instruction::LoadConst(Object::Bool(*b)));
+                self.emit(Instruction::LoadConst(Object::bool(*b)));
             }
             Expr::Name(name) => {
                 let sym_id = interner.intern(name);

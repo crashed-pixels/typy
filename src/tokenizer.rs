@@ -1,5 +1,11 @@
-use std::iter::Peekable;
-use std::str::Chars;
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
+use core::iter::Peekable;
+use core::str::Chars;
 
 /// A lexical token recognized by the interpreter.
 ///

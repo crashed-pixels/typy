@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use alloc::{borrow::ToOwned, collections::BTreeMap, string::String, vec::Vec};
 
 /// A compact identifier for an interned string.
 ///
 /// `SymbolId` is intentionally small, copyable, and cheap to compare.
 /// It is only meaningful within the [`Interner`] instance that created it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SymbolId(pub usize);
 
 /// A string interner.
@@ -19,7 +19,7 @@ pub struct SymbolId(pub usize);
 #[derive(Debug)]
 pub struct Interner {
     /// Maps interned text to its symbol.
-    map: HashMap<String, SymbolId>,
+    map: BTreeMap<String, SymbolId>,
 
     /// Stores interned text in insertion order so symbols can be resolved
     /// back into their original string form.
@@ -37,7 +37,7 @@ impl Interner {
     #[inline]
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: BTreeMap::new(),
             strings: Vec::new(),
         }
     }

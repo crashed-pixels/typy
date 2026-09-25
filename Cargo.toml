@@ -3,4 +3,18 @@ name = "typy"
 version = "0.2.0"
 edition = "2024"
 
+[features]
+default = ["cli"]
+cli = []
+
+[[bin]]
+name = "typy"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [dependencies]
+
+[[example]]
+name = "embedded_core"
+path = "examples/embedded_core.rs"
+crate-type = ["lib"]

@@ -16,7 +16,7 @@ fn compiles_number_literal() {
     let code = compile("42\n");
 
     assert_eq!(code.len(), 2);
-    assert_eq!(code[0], Instruction::LoadConst(Object::Int(42)));
+    assert_eq!(code[0], Instruction::LoadConst(Object::int(42)));
     assert_eq!(code[1], Instruction::SetResult);
 }
 
@@ -25,7 +25,7 @@ fn compiles_bool_literal() {
     let code = compile("True\n");
 
     assert_eq!(code.len(), 2);
-    assert_eq!(code[0], Instruction::LoadConst(Object::Bool(true)));
+    assert_eq!(code[0], Instruction::LoadConst(Object::bool(true)));
     assert_eq!(code[1], Instruction::SetResult);
 }
 
@@ -36,7 +36,7 @@ fn compiles_variable_declaration() {
     // Should have LoadConst and StoreName
     assert!(
         code.iter()
-            .any(|i| matches!(i, Instruction::LoadConst(Object::Int(10))))
+            .any(|i| matches!(i, Instruction::LoadConst(value) if value.as_int() == Some(10)))
     );
     assert!(code.iter().any(|i| matches!(i, Instruction::StoreName(_))));
 }
@@ -48,7 +48,7 @@ fn compiles_variable_declaration_without_initializer() {
     // Should emit default value (0) and StoreName
     assert!(
         code.iter()
-            .any(|i| matches!(i, Instruction::LoadConst(Object::Int(0))))
+            .any(|i| matches!(i, Instruction::LoadConst(value) if value.as_int() == Some(0)))
     );
     assert!(code.iter().any(|i| matches!(i, Instruction::StoreName(_))));
 }
@@ -71,11 +71,11 @@ fn compiles_binary_operation() {
 
     assert!(
         code.iter()
-            .any(|i| matches!(i, Instruction::LoadConst(Object::Int(1))))
+            .any(|i| matches!(i, Instruction::LoadConst(value) if value.as_int() == Some(1)))
     );
     assert!(
         code.iter()
-            .any(|i| matches!(i, Instruction::LoadConst(Object::Int(2))))
+            .any(|i| matches!(i, Instruction::LoadConst(value) if value.as_int() == Some(2)))
     );
     assert!(code.iter().any(|i| matches!(i, Instruction::Add)));
 }

@@ -1,7 +1,38 @@
 use crate::compiler::Instruction;
 use crate::object::Object;
 use crate::symbol::{Interner, SymbolId};
-use std::collections::HashMap;
+use alloc::{
+    collections::BTreeMap,
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
+use core::fmt;
+
+/// Borrowed VM state after an instruction. Hosts choose where to send traces.
+pub struct TraceEvent<'a> {
+    pub instruction: &'a Instruction,
+    pub ip: usize,
+    pub stack: &'a [Object],
+    pub globals: &'a BTreeMap<SymbolId, Object>,
+    pub frames: &'a [CallFrame],
+}
+
+impl fmt::Display for TraceEvent<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "  [IP:{:03}] {:?} | Stack: {:?} | Globals: {:?} | Frames ({}): {:?}",
+            self.ip,
+            self.instruction,
+            self.stack,
+            self.globals,
+            self.frames.len(),
+            self.frames
+        )
+    }
+}
 
 /// A call frame representing a lexical scope during execution.
 ///
@@ -23,10 +54,10 @@ pub struct CallFrame {
 impl CallFrame {
     /// Creates a new call frame with the specified number of local variable slots.
     ///
-    /// All slots are initialized to `Object::None`.
+    /// All slots are initialized to `Object::none()`.
     pub fn new(ip_offset: usize, num_locals: usize) -> Self {
         Self {
-            locals: vec![Object::None; num_locals],
+            locals: vec![Object::none(); num_locals],
             _ip_offset: ip_offset,
         }
     }
@@ -49,11 +80,11 @@ pub struct VM {
     /// The operand stack for intermediate values.
     stack: Vec<Object>,
     /// Last expression statement evaluated in the current run.
-    result: Object,
+    result: Option<Object>,
     /// A stack of call frames. The last element is the current frame.
     frames: Vec<CallFrame>,
     /// Global variables indexed by symbol ID.
-    globals: HashMap<SymbolId, Object>,
+    globals: BTreeMap<SymbolId, Object>,
 }
 
 impl Default for VM {
@@ -67,9 +98,9 @@ impl VM {
     pub fn new() -> Self {
         VM {
             stack: Vec::new(),
-            result: Object::None,
+            result: None,
             frames: vec![CallFrame::new(0, 0)],
-            globals: HashMap::new(),
+            globals: BTreeMap::new(),
         }
     }
 
@@ -94,18 +125,24 @@ impl VM {
     /// Failed runs roll back all global writes. Operands and temporary frames are
     /// discarded on every exit; the result is the last executed expression statement.
     ///
-    /// If `debug` is true, the VM prints the state after each instruction.
-    pub fn run(
+    /// Use [`VM::run_with_trace`] for host-controlled diagnostic output.
+    pub fn run(&mut self, bytecode: &[Instruction], interner: &Interner) -> Result<Object, String> {
+        self.run_with_trace(bytecode, interner, |_| {})
+    }
+
+    /// Executes with a callback after each successfully executed instruction.
+    /// The callback only borrows state; no I/O or OS services are required.
+    pub fn run_with_trace(
         &mut self,
         bytecode: &[Instruction],
         interner: &Interner,
-        debug: bool,
+        mut trace: impl FnMut(&TraceEvent<'_>),
     ) -> Result<Object, String> {
         let globals = self.globals.clone();
-        let outcome = self.run_instructions(bytecode, interner, debug);
+        let outcome = self.run_instructions(bytecode, interner, &mut trace);
         self.stack.clear();
         self.frames.truncate(1);
-        self.result = Object::None;
+        self.result = None;
         if outcome.is_err() {
             self.globals = globals;
         }
@@ -116,7 +153,7 @@ impl VM {
         &mut self,
         bytecode: &[Instruction],
         interner: &Interner,
-        debug: bool,
+        trace: &mut impl FnMut(&TraceEvent<'_>),
     ) -> Result<Object, String> {
         let mut ip = 0;
 
@@ -126,17 +163,13 @@ impl VM {
             match instruction {
                 Instruction::Jump(target) => {
                     ip = *target;
-                    if debug {
-                        self.print_debug_state(instruction, ip);
-                    }
+                    self.trace_state(instruction, ip, trace);
                     continue;
                 }
                 Instruction::JumpIfFalse(target) => {
                     if let Some(new_ip) = self.execute_jump_if_false(*target)? {
                         ip = new_ip;
-                        if debug {
-                            self.print_debug_state(instruction, ip);
-                        }
+                        self.trace_state(instruction, ip, trace);
                         continue;
                     }
                 }
@@ -147,12 +180,14 @@ impl VM {
 
             ip += 1;
 
-            if debug {
-                self.print_debug_state(instruction, ip);
-            }
+            self.trace_state(instruction, ip, trace);
         }
 
-        Ok(self.stack.pop().unwrap_or_else(|| self.result.clone()))
+        Ok(self
+            .stack
+            .pop()
+            .or_else(|| self.result.take())
+            .unwrap_or_else(Object::none))
     }
 
     /// Executes a single instruction.
@@ -190,10 +225,11 @@ impl VM {
                 self.execute_store_local(*depth, *slot)?
             }
             Instruction::SetResult => {
-                self.result = self
-                    .stack
-                    .pop()
-                    .ok_or("SystemError: stack underflow at SET_RESULT")?;
+                self.result = Some(
+                    self.stack
+                        .pop()
+                        .ok_or("SystemError: stack underflow at SET_RESULT")?,
+                );
             }
 
             Instruction::EnterBlock(num_locals) => {
@@ -330,7 +366,7 @@ impl VM {
             .pop()
             .ok_or("SystemError: stack underflow (left operand)")?;
         let result = op(&left, &right)?;
-        self.stack.push(Object::Bool(result));
+        self.stack.push(Object::bool(result));
         Ok(())
     }
 
@@ -344,9 +380,9 @@ impl VM {
             .pop()
             .ok_or("SystemError: stack underflow at JUMP_IF_FALSE")?;
 
-        match condition {
-            Object::Bool(false) => Ok(Some(target)),
-            Object::Bool(true) => Ok(None),
+        match condition.as_bool() {
+            Some(false) => Ok(Some(target)),
+            Some(true) => Ok(None),
             _ => Err(format!(
                 "TypeError: condition must be bool, got {}",
                 condition.type_name()
@@ -354,16 +390,18 @@ impl VM {
         }
     }
 
-    /// Prints the VM state for debugging purposes.
-    fn print_debug_state(&self, instruction: &Instruction, ip: usize) {
-        println!(
-            "  [IP:{:03}] {:?} | Stack: {:?} | Globals: {:?} | Frames ({}): {:?}",
-            ip,
+    fn trace_state(
+        &self,
+        instruction: &Instruction,
+        ip: usize,
+        trace: &mut impl FnMut(&TraceEvent<'_>),
+    ) {
+        trace(&TraceEvent {
             instruction,
-            self.stack,
-            self.globals,
-            self.frames.len(),
-            self.frames,
-        );
+            ip,
+            stack: &self.stack,
+            globals: &self.globals,
+            frames: &self.frames,
+        });
     }
 }

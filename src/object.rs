@@ -1,39 +1,193 @@
-use std::fmt;
+use alloc::{
+    format,
+    rc::Rc,
+    string::{String, ToString},
+};
+use core::fmt;
 
-/// A runtime value in the interpreter.
-///
-/// This enum represents all possible values that can exist at runtime.
-/// Currently supports integers, booleans, and None.
-///
-/// Future extensions may add floats, strings, lists, dictionaries,
-/// functions, or user-defined objects.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Object {
-    /// A 64-bit signed integer.
-    Int(i64),
-    /// A boolean value.
-    Bool(bool),
-    /// The absence of a value.
-    None,
+/// Common object header. Reference counts are owned safely by `Rc`, not raw fields.
+/// Type identity cannot be changed independently from an object's payload.
+pub struct ObjectHeader {
+    typ: &'static TypeObject,
 }
 
+impl ObjectHeader {
+    pub fn type_object(&self) -> &'static TypeObject {
+        self.typ
+    }
+}
+
+/// A TyPy type object. Built-in descriptors are immutable and statically allocated.
+/// Like instances, type objects have a header pointing at their metatype.
+/// This is the metadata foundation for classes, not an implementation of MRO,
+/// dynamic attributes, or user-defined heap types.
+pub struct TypeObject {
+    header: ObjectHeader,
+    name: &'static str,
+    base: Option<&'static TypeObject>,
+}
+
+impl TypeObject {
+    pub fn header(&self) -> &ObjectHeader {
+        &self.header
+    }
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+    pub fn base(&self) -> Option<&'static TypeObject> {
+        self.base
+    }
+}
+
+impl fmt::Debug for TypeObject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TypeObject")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+/// The metatype is its own type. Static references need neither atomics nor locks.
+pub static TYPE_TYPE: TypeObject = TypeObject {
+    header: ObjectHeader { typ: &TYPE_TYPE },
+    name: "type",
+    base: Some(&OBJECT_TYPE),
+};
+pub static OBJECT_TYPE: TypeObject = TypeObject {
+    header: ObjectHeader { typ: &TYPE_TYPE },
+    name: "object",
+    base: None,
+};
+pub static INT_TYPE: TypeObject = TypeObject {
+    header: ObjectHeader { typ: &TYPE_TYPE },
+    name: "int",
+    base: Some(&OBJECT_TYPE),
+};
+// TyPy deliberately keeps bool separate from int, preserving static semantics.
+pub static BOOL_TYPE: TypeObject = TypeObject {
+    header: ObjectHeader { typ: &TYPE_TYPE },
+    name: "bool",
+    base: Some(&OBJECT_TYPE),
+};
+pub static NONE_TYPE: TypeObject = TypeObject {
+    header: ObjectHeader { typ: &TYPE_TYPE },
+    name: "NoneType",
+    base: Some(&OBJECT_TYPE),
+};
+
+/// Immutable fixed-width integer payload. The host primitive is an implementation detail.
+#[derive(Debug, PartialEq)]
+pub struct IntObject {
+    value: i64,
+}
+impl IntObject {
+    pub fn value(&self) -> i64 {
+        self.value
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct BoolObject {
+    value: bool,
+}
+impl BoolObject {
+    pub fn value(&self) -> bool {
+        self.value
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct NoneObject;
+
+#[derive(PartialEq)]
+enum Payload {
+    Int(IntObject),
+    Bool(BoolObject),
+    None(NoneObject),
+}
+
+struct ObjectData {
+    header: ObjectHeader,
+    payload: Payload,
+}
+
+/// An owning handle to an immutable TyPy object.
+/// Cloning shares identity and increments a non-atomic reference count. Dropping
+/// the final handle releases the allocation. No unsafe casts or GC are needed for
+/// the current acyclic payloads. Handles are intentionally neither Send nor Sync.
+#[derive(Clone)]
+pub struct Object(Rc<ObjectData>);
+
 impl Object {
-    /// Returns the type name of this object as it appears in error messages.
+    fn new(typ: &'static TypeObject, payload: Payload) -> Self {
+        Self(Rc::new(ObjectData {
+            header: ObjectHeader { typ },
+            payload,
+        }))
+    }
+    pub fn int(value: i64) -> Self {
+        Self::new(&INT_TYPE, Payload::Int(IntObject { value }))
+    }
+    pub fn bool(value: bool) -> Self {
+        Self::new(&BOOL_TYPE, Payload::Bool(BoolObject { value }))
+    }
+    pub fn none() -> Self {
+        Self::new(&NONE_TYPE, Payload::None(NoneObject))
+    }
+    pub fn header(&self) -> &ObjectHeader {
+        &self.0.header
+    }
+    pub fn type_object(&self) -> &'static TypeObject {
+        self.header().type_object()
+    }
     pub fn type_name(&self) -> &'static str {
-        match self {
-            Object::Int(_) => "int",
-            Object::Bool(_) => "bool",
-            Object::None => "NoneType",
+        self.type_object().name()
+    }
+    pub fn as_int(&self) -> Option<i64> {
+        match &self.0.payload {
+            Payload::Int(value) => Some(value.value()),
+            _ => None,
         }
+    }
+    pub fn as_bool(&self) -> Option<bool> {
+        match &self.0.payload {
+            Payload::Bool(value) => Some(value.value()),
+            _ => None,
+        }
+    }
+    pub fn is_none(&self) -> bool {
+        matches!(self.0.payload, Payload::None(_))
+    }
+    pub fn is_identical(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+    pub fn strong_count(&self) -> usize {
+        Rc::strong_count(&self.0)
+    }
+}
+
+impl PartialEq for Object {
+    fn eq(&self, other: &Self) -> bool {
+        core::ptr::eq(self.type_object(), other.type_object()) && self.0.payload == other.0.payload
     }
 }
 
 impl fmt::Display for Object {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Object::Int(n) => write!(f, "{}", n),
-            Object::Bool(b) => write!(f, "{}", if *b { "True" } else { "False" }),
-            Object::None => write!(f, "None"),
+        match &self.0.payload {
+            Payload::Int(value) => write!(f, "{}", value.value()),
+            Payload::Bool(value) => f.write_str(if value.value() { "True" } else { "False" }),
+            Payload::None(_) => f.write_str("None"),
+        }
+    }
+}
+
+impl fmt::Debug for Object {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0.payload {
+            Payload::Int(value) => f.debug_tuple("Int").field(&value.value()).finish(),
+            Payload::Bool(value) => f.debug_tuple("Bool").field(&value.value()).finish(),
+            Payload::None(_) => f.write_str("None"),
         }
     }
 }
@@ -65,9 +219,9 @@ impl Object {
     /// Returns an error if either operand is not an integer, or if the
     /// divisor is zero.
     pub fn div(&self, other: &Object) -> Result<Object, String> {
-        match (self, other) {
-            (Object::Int(_), Object::Int(b)) => {
-                if *b == 0 {
+        match (self.as_int(), other.as_int()) {
+            (Some(_), Some(b)) => {
+                if b == 0 {
                     Err("ZeroDivisionError: division by zero".to_string())
                 } else {
                     self.arithmetic_op("/", other, i64::checked_div)
@@ -126,9 +280,9 @@ impl Object {
     where
         F: FnOnce(i64, i64) -> Option<i64>,
     {
-        match (self, other) {
-            (Object::Int(a), Object::Int(b)) => op(*a, *b)
-                .map(Object::Int)
+        match (self.as_int(), other.as_int()) {
+            (Some(a), Some(b)) => op(a, b)
+                .map(Object::int)
                 .ok_or_else(|| format!("OverflowError: integer overflow in '{}'", operator)),
             _ => Err(Self::binary_op_error(operator, self, other)),
         }
@@ -141,8 +295,8 @@ impl Object {
     where
         F: FnOnce(i64, i64) -> bool,
     {
-        match (self, other) {
-            (Object::Int(a), Object::Int(b)) => Ok(op(*a, *b)),
+        match (self.as_int(), other.as_int()) {
+            (Some(a), Some(b)) => Ok(op(a, b)),
             _ => Err(Self::binary_op_error(operator, self, other)),
         }
     }
@@ -154,10 +308,10 @@ impl Object {
     where
         F: FnOnce(&Object, &Object) -> bool,
     {
-        match (self, other) {
-            (Object::Int(_), Object::Int(_)) => Ok(op(self, other)),
-            (Object::Bool(_), Object::Bool(_)) => Ok(op(self, other)),
-            _ => Err(Self::binary_op_error(operator, self, other)),
+        if core::ptr::eq(self.type_object(), other.type_object()) && !self.is_none() {
+            Ok(op(self, other))
+        } else {
+            Err(Self::binary_op_error(operator, self, other))
         }
     }
 

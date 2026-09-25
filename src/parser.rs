@@ -1,8 +1,14 @@
 use crate::tokenizer::Token;
 use crate::types::Type;
+use alloc::{
+    boxed::Box,
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 
 /// An expression node in the abstract syntax tree.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// An integer literal.
     Number(i64),
@@ -25,7 +31,7 @@ pub enum Expr {
 }
 
 /// A statement node in the abstract syntax tree.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// An expression used as a statement.
     Expr(Expr),

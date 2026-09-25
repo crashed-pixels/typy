@@ -25,7 +25,7 @@ fn rejects_type_mismatch_in_declaration() {
 
 #[test]
 fn rejects_undeclared_variable() {
-    let result = check("x = 10\n");
+    let result = check("x\n");
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not defined"));
 }

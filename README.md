@@ -100,3 +100,23 @@ You can use `just` for quick check `$ just check-all`
 - Library clients handling untrusted source should use
   `tokenizer::try_tokenize_str`, which returns `Result`. The legacy `tokenize`
   and `tokenize_str` wrappers retain their panic-on-error behavior.
+
+## Portable core and inferred bindings
+
+TyPy's library is always `no_std + alloc`. The default `cli` feature keeps the
+file runner, REPL, and debug output available on desktop systems. Embedded hosts
+provide an allocator and I/O; disable default features when embedding.
+
+```rust
+let mut interpreter = typy::Interpreter::new();
+interpreter.eval("a = 123")?;
+assert_eq!(interpreter.eval("a + 1")?.as_int(), Some(124));
+// The inferred type stays fixed: `a = True` is a type error.
+```
+
+Runtime `int`, `bool`, and internal `None` values now use owned TyPy object
+handles with a common header and shared type descriptors. Cloning preserves
+object identity through non-atomic reference counting.
+
+See [embedding, object architecture, and Rust API migration](docs/embedding.md)
+for platform requirements, shadowing rules, and the compile-only embedded example.

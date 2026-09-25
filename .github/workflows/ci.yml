@@ -17,8 +17,12 @@ env:
 
 jobs:
   ci:
-    name: Format / Lint / Test / Build
-    runs-on: ubuntu-latest
+    name: Host (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
@@ -27,7 +31,7 @@ jobs:
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Cache Cargo registry and target directory
         uses: Swatinem/rust-cache@v2
@@ -41,18 +45,43 @@ jobs:
       - name: Run tests
         run: cargo test --locked --all-features --verbose
 
+      - name: Test core without CLI
+        run: cargo test --locked --no-default-features
+
+      - name: Lint core without CLI
+        run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
+
       - name: Run release tests
         run: cargo test --release --locked --all-features
 
       - name: Build debug binary
         run: cargo build --locked --verbose
 
+  embedded:
+    name: no_std (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - thumbv6m-none-eabi
+          - riscv32imc-unknown-none-elf
+          - wasm32-unknown-unknown
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build portable core and embedding example
+        run: cargo build --locked --release --no-default-features --lib --example embedded_core --target ${{ matrix.target }}
+
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
 
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: ci
+    needs: [ci, embedded]
 
     permissions:
       contents: write

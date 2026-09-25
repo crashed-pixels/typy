@@ -1,6 +1,7 @@
+use crate::object::{BOOL_TYPE, INT_TYPE, TypeObject};
 use crate::parser::{Expr, Operator, Stmt};
 use crate::symbol::{Interner, SymbolId};
-use std::collections::HashMap;
+use alloc::{collections::BTreeMap, format, string::String, vec, vec::Vec};
 
 /// A type in the type system.
 ///
@@ -20,9 +21,14 @@ impl Type {
     ///
     /// This is used for error messages and type annotations.
     pub fn name(&self) -> &'static str {
+        self.type_object().name()
+    }
+
+    /// The runtime descriptor corresponding to this statically checked type.
+    pub fn type_object(&self) -> &'static TypeObject {
         match self {
-            Type::Int => "int",
-            Type::Bool => "bool",
+            Type::Int => &INT_TYPE,
+            Type::Bool => &BOOL_TYPE,
         }
     }
 }
@@ -39,7 +45,7 @@ impl Type {
 pub struct TypeChecker {
     /// A stack of lexical scopes, each mapping symbol IDs to types.
     /// The last element is the current (innermost) scope.
-    scopes: Vec<HashMap<SymbolId, Type>>,
+    scopes: Vec<BTreeMap<SymbolId, Type>>,
 }
 
 impl Default for TypeChecker {
@@ -52,7 +58,7 @@ impl TypeChecker {
     /// Creates a new type checker with an empty global scope.
     pub fn new() -> Self {
         TypeChecker {
-            scopes: vec![HashMap::new()],
+            scopes: vec![BTreeMap::new()],
         }
     }
 
@@ -62,7 +68,7 @@ impl TypeChecker {
     ///
     /// Panics if the scope stack is empty, which should never happen in
     /// practice since the global scope is always present.
-    fn current_scope(&mut self) -> &mut HashMap<SymbolId, Type> {
+    fn current_scope(&mut self) -> &mut BTreeMap<SymbolId, Type> {
         self.scopes
             .last_mut()
             .expect("scope stack should never be empty")
@@ -72,7 +78,7 @@ impl TypeChecker {
     ///
     /// This is called when entering a block (e.g., the body of an if statement).
     fn enter_block(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(BTreeMap::new());
     }
 
     /// Exits the current scope and returns to the parent scope.
@@ -114,30 +120,37 @@ impl TypeChecker {
     /// This is the main entry point for type checking. It processes each
     /// statement in order. On error, all declarations and scopes are unchanged.
     pub fn check(&mut self, stmts: &[Stmt], interner: &mut Interner) -> Result<(), String> {
-        let mut candidate = self.clone();
-        for stmt in stmts {
-            candidate.check_stmt(stmt, interner)?;
-        }
-        *self = candidate;
-        Ok(())
+        self.check_and_resolve(stmts, interner).map(|_| ())
     }
 
-    /// Type-checks a single statement.
-    fn check_stmt(&mut self, stmt: &Stmt, interner: &mut Interner) -> Result<(), String> {
+    /// Checks transactionally and lowers first assignments into typed declarations.
+    /// Compile the returned AST, so inferred block locals get frame slots rather
+    /// than global stores. `check` alone is intended only for validation.
+    pub fn check_and_resolve(
+        &mut self,
+        stmts: &[Stmt],
+        interner: &mut Interner,
+    ) -> Result<Vec<Stmt>, String> {
+        let mut candidate = self.clone();
+        let resolved = stmts
+            .iter()
+            .map(|stmt| candidate.check_stmt(stmt, interner))
+            .collect::<Result<Vec<_>, _>>()?;
+        *self = candidate;
+        Ok(resolved)
+    }
+
+    fn check_stmt(&mut self, stmt: &Stmt, interner: &mut Interner) -> Result<Stmt, String> {
         match stmt {
             Stmt::Expr(expr) => {
                 self.check_expr(expr, interner)?;
-                Ok(())
             }
-
             Stmt::VariableDecl {
                 name,
                 typ,
                 initializer,
             } => {
                 let sym_id = interner.intern(name);
-
-                // If there's an initializer, verify its type matches the declaration
                 if let Some(init) = initializer {
                     let init_type = self.check_expr(init, interner)?;
                     if init_type != *typ {
@@ -149,83 +162,86 @@ impl TypeChecker {
                         ));
                     }
                 }
-
                 self.declare(sym_id, *typ, interner)?;
-                Ok(())
             }
-
             Stmt::Assign { name, value } => {
+                // Infer the RHS before introducing the binding: `x = x + 1`
+                // cannot read a new, uninitialized x.
+                let typ = self.check_expr(value, interner)?;
                 let sym_id = interner.intern(name);
-
-                // Look up the declared type
-                let expected_type = match self.resolve(sym_id) {
-                    Some(expected_type) => *expected_type,
-                    None => return Err(format!("TypeError: variable '{}' not defined", name)),
-                };
-
-                // Verify the assigned value has the correct type
-                let val_type = self.check_expr(value, interner)?;
-                if expected_type != val_type {
-                    return Err(format!(
-                        "TypeError: mismatched types '{}' expected to be '{}', but got '{}'",
-                        name,
-                        expected_type.name(),
-                        val_type.name()
-                    ));
+                if let Some(expected) = self.resolve(sym_id) {
+                    if *expected != typ {
+                        return Err(format!(
+                            "TypeError: mismatched types '{}' expected to be '{}', but got '{}'",
+                            name,
+                            expected.name(),
+                            typ.name()
+                        ));
+                    }
+                } else {
+                    self.declare(sym_id, typ, interner)?;
+                    return Ok(Stmt::VariableDecl {
+                        name: name.clone(),
+                        typ,
+                        initializer: Some(value.clone()),
+                    });
                 }
-                Ok(())
             }
-
             Stmt::If {
                 condition,
                 then_branch,
                 elif_branches,
                 else_branch,
             } => {
-                // Check the main condition
-                let cond_type = self.check_expr(condition, interner)?;
-                if cond_type != Type::Bool {
-                    return Err(format!(
-                        "TypeError: if condition must be 'bool', got '{}'",
-                        cond_type.name()
-                    ));
+                self.check_condition(condition, "if", interner)?;
+                let then_branch = self.check_block(then_branch, interner)?;
+                let mut resolved_elifs = Vec::new();
+                for (condition, branch) in elif_branches {
+                    self.check_condition(condition, "elif", interner)?;
+                    resolved_elifs.push((condition.clone(), self.check_block(branch, interner)?));
                 }
-
-                // Check the then branch in a new scope
-                self.check_block(then_branch, interner)?;
-
-                // Check each elif branch
-                for (elif_cond, elif_branch) in elif_branches {
-                    let elif_cond_type = self.check_expr(elif_cond, interner)?;
-                    if elif_cond_type != Type::Bool {
-                        return Err(format!(
-                            "TypeError: elif condition must be 'bool', got '{}'",
-                            elif_cond_type.name()
-                        ));
-                    }
-
-                    self.check_block(elif_branch, interner)?;
-                }
-
-                // Check the else branch if present
-                if let Some(else_block) = else_branch {
-                    self.check_block(else_block, interner)?;
-                }
-
-                Ok(())
+                let else_branch = else_branch
+                    .as_ref()
+                    .map(|branch| self.check_block(branch, interner))
+                    .transpose()?;
+                return Ok(Stmt::If {
+                    condition: condition.clone(),
+                    then_branch,
+                    elif_branches: resolved_elifs,
+                    else_branch,
+                });
             }
         }
+        Ok(stmt.clone())
     }
 
-    /// Type-checks a block of statements in a new scope.
-    ///
-    /// This helper eliminates duplication when checking the bodies of
-    /// if/elif/else branches.
-    fn check_block(&mut self, stmts: &[Stmt], interner: &mut Interner) -> Result<(), String> {
+    fn check_condition(
+        &mut self,
+        condition: &Expr,
+        keyword: &str,
+        interner: &mut Interner,
+    ) -> Result<(), String> {
+        let typ = self.check_expr(condition, interner)?;
+        if typ != Type::Bool {
+            return Err(format!(
+                "TypeError: {} condition must be 'bool', got '{}'",
+                keyword,
+                typ.name()
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_block(
+        &mut self,
+        stmts: &[Stmt],
+        interner: &mut Interner,
+    ) -> Result<Vec<Stmt>, String> {
         self.enter_block();
         let result = stmts
             .iter()
-            .try_for_each(|stmt| self.check_stmt(stmt, interner));
+            .map(|stmt| self.check_stmt(stmt, interner))
+            .collect();
         self.exit_block();
         result
     }
