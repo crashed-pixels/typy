@@ -12,6 +12,14 @@ use core::str::Chars;
 /// This enum intentionally keeps a small, Python-like token set.
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
+    Def,
+    Class,
+    Return,
+    Pass,
+    None,
+    Arrow,
+    Comma,
+    Dot,
     /// An integer literal.
     Number(i64),
 
@@ -333,6 +341,11 @@ impl<'input> Tokenizer<'input> {
     /// Returns `true` if the character was handled as an operator.
     fn scan_operator(&mut self, ch: char) -> Result<bool, String> {
         Ok(match ch {
+            '-' if self.peek_is('>') => {
+                self.chars.next();
+                self.push(Token::Arrow);
+                true
+            }
             '<' => {
                 if self.peek_is('=') {
                     self.chars.next();
@@ -385,6 +398,8 @@ impl<'input> Tokenizer<'input> {
             '(' => Token::LParen,
             ')' => Token::RParen,
             ':' => Token::Colon,
+            ',' => Token::Comma,
+            '.' => Token::Dot,
             _ => return Err(format!("SyntaxError: unknown token: {}", ch)),
         };
 
@@ -425,6 +440,11 @@ fn is_name_continue(ch: char) -> bool {
 /// Maps an identifier string to a keyword token, if applicable.
 fn keyword_token(name: &str) -> Option<Token> {
     match name {
+        "def" => Some(Token::Def),
+        "class" => Some(Token::Class),
+        "return" => Some(Token::Return),
+        "pass" => Some(Token::Pass),
+        "None" => Some(Token::None),
         "True" => Some(Token::True),
         "False" => Some(Token::False),
         "if" => Some(Token::If),

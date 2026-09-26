@@ -1,8 +1,11 @@
+mod definitions;
+use crate::bytecode::{ClassCode, FunctionCode};
 use crate::object::Object;
 use crate::parser::{Expr, Operator, Stmt};
 use crate::symbol::{Interner, SymbolId};
 use crate::types::Type;
 use alloc::{collections::BTreeSet, vec, vec::Vec};
+use alloc::{rc::Rc, string::String};
 
 /// A bytecode instruction for the virtual machine.
 ///
@@ -11,6 +14,11 @@ use alloc::{collections::BTreeSet, vec, vec::Vec};
 /// the operand stack and may push results back onto the stack.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
+    Call(usize),
+    Return,
+    GetAttribute(String),
+    SetAttribute(String),
+    CreateClass(Rc<ClassCode>),
     /// Pushes a constant value onto the stack.
     LoadConst(Object),
 
@@ -27,10 +35,16 @@ pub enum Instruction {
     StoreLocal(usize),
 
     /// Loads a local in an enclosing block (`depth` frames outward).
-    LoadEnclosing { depth: usize, slot: usize },
+    LoadEnclosing {
+        depth: usize,
+        slot: usize,
+    },
 
     /// Stores a local in an enclosing block (`depth` frames outward).
-    StoreEnclosing { depth: usize, slot: usize },
+    StoreEnclosing {
+        depth: usize,
+        slot: usize,
+    },
 
     /// Pops an expression statement's value into the run's result register.
     SetResult,
@@ -262,6 +276,30 @@ impl Compiler {
     /// Compiles a single statement.
     fn compile_stmt(&mut self, stmt: &Stmt, interner: &mut Interner) {
         match stmt {
+            Stmt::Function(function) => {
+                let code = Self::compile_function(function, interner);
+                self.emit(Instruction::LoadConst(Object::function(code)));
+                self.emit(Instruction::StoreName(interner.intern(&function.name)));
+            }
+            Stmt::Class { name, body } => self.compile_class(name, body, interner),
+            Stmt::Return(value) => {
+                if let Some(value) = value {
+                    self.compile_expr(value, interner);
+                } else {
+                    self.emit(Instruction::LoadConst(Object::none()));
+                }
+                self.emit(Instruction::Return);
+            }
+            Stmt::SetAttribute {
+                object,
+                name,
+                value,
+            } => {
+                self.compile_expr(object, interner);
+                self.compile_expr(value, interner);
+                self.emit(Instruction::SetAttribute(name.clone()));
+            }
+            Stmt::Pass => {}
             Stmt::Expr(expr) => {
                 self.compile_expr(expr, interner);
                 self.emit(Instruction::SetResult);
@@ -282,6 +320,7 @@ impl Compiler {
                     match typ {
                         Type::Int => self.emit(Instruction::LoadConst(Object::int(0))),
                         Type::Bool => self.emit(Instruction::LoadConst(Object::bool(false))),
+                        _ => self.emit(Instruction::LoadConst(Object::none())),
                     }
                 }
 
@@ -382,6 +421,18 @@ impl Compiler {
     /// Compiles an expression, pushing its result onto the stack.
     fn compile_expr(&mut self, expr: &Expr, interner: &mut Interner) {
         match expr {
+            Expr::None => self.emit(Instruction::LoadConst(Object::none())),
+            Expr::Call { callee, arguments } => {
+                self.compile_expr(callee, interner);
+                for argument in arguments {
+                    self.compile_expr(argument, interner);
+                }
+                self.emit(Instruction::Call(arguments.len()));
+            }
+            Expr::Attribute { object, name } => {
+                self.compile_expr(object, interner);
+                self.emit(Instruction::GetAttribute(name.clone()));
+            }
             Expr::Number(n) => {
                 self.emit(Instruction::LoadConst(Object::int(*n)));
             }

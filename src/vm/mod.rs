@@ -1,3 +1,4 @@
+mod calls;
 use crate::compiler::Instruction;
 use crate::object::Object;
 use crate::symbol::{Interner, SymbolId};
@@ -8,6 +9,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use calls::{Activation, Code};
 use core::fmt;
 
 /// Borrowed VM state after an instruction. Hosts choose where to send traces.
@@ -85,6 +87,8 @@ pub struct VM {
     frames: Vec<CallFrame>,
     /// Global variables indexed by symbol ID.
     globals: BTreeMap<SymbolId, Object>,
+    writes: Vec<(Object, String, Object)>,
+    call_limit: usize,
 }
 
 impl Default for VM {
@@ -101,6 +105,8 @@ impl VM {
             result: None,
             frames: vec![CallFrame::new(0, 0)],
             globals: BTreeMap::new(),
+            writes: Vec::new(),
+            call_limit: 128,
         }
     }
 
@@ -145,8 +151,19 @@ impl VM {
         self.result = None;
         if outcome.is_err() {
             self.globals = globals;
+            for (object, name, old) in self.writes.drain(..).rev() {
+                // Both values have the same immutable descriptor; the field
+                // cannot disappear. Rollback never runs user code.
+                let _ = object.replace_field(&name, old);
+            }
         }
+        self.writes.clear();
         outcome
+    }
+
+    /// Bound recursive calls by VM frames, not by the host's native stack.
+    pub fn set_call_limit(&mut self, limit: usize) {
+        self.call_limit = limit;
     }
 
     fn run_instructions(
@@ -155,39 +172,74 @@ impl VM {
         interner: &Interner,
         trace: &mut impl FnMut(&TraceEvent<'_>),
     ) -> Result<Object, String> {
-        let mut ip = 0;
-
-        while ip < bytecode.len() {
-            let instruction = &bytecode[ip];
-
-            match instruction {
-                Instruction::Jump(target) => {
-                    ip = *target;
-                    self.trace_state(instruction, ip, trace);
-                    continue;
+        let mut activations = vec![Activation::root(bytecode)];
+        loop {
+            let activation = activations
+                .last_mut()
+                .ok_or("SystemError: missing activation")?;
+            let Some(instruction) = activation.code.instructions().get(activation.ip).cloned()
+            else {
+                if activations.len() == 1 {
+                    return Ok(self
+                        .stack
+                        .pop()
+                        .or_else(|| self.result.take())
+                        .unwrap_or_else(Object::none));
                 }
+                return Err("SystemError: function ended without RETURN".to_string());
+            };
+            activation.ip += 1;
+            let ip = activation.ip;
+            match &instruction {
+                Instruction::Jump(target) => activation.ip = *target,
                 Instruction::JumpIfFalse(target) => {
-                    if let Some(new_ip) = self.execute_jump_if_false(*target)? {
-                        ip = new_ip;
-                        self.trace_state(instruction, ip, trace);
-                        continue;
+                    if let Some(target) = self.execute_jump_if_false(*target)? {
+                        activation.ip = target;
                     }
                 }
-                _ => {
-                    self.execute_instruction(instruction, interner, ip)?;
+                Instruction::Call(arity) => {
+                    if let Some(invocation) = self.prepare_call(*arity)? {
+                        if activations.len() > self.call_limit {
+                            return Err("RecursionError: call limit exceeded".to_string());
+                        }
+                        let frames = self.frames.len();
+                        let stack = self.stack.len();
+                        let mut frame = CallFrame::new(0, invocation.function.locals);
+                        if invocation.arguments.len() > frame.locals.len() {
+                            return Err("SystemError: invalid function frame".to_string());
+                        }
+                        for (slot, argument) in frame.locals.iter_mut().zip(invocation.arguments) {
+                            *slot = argument;
+                        }
+                        self.frames.push(frame);
+                        activations.push(Activation {
+                            code: Code::Function(invocation.function),
+                            ip: 0,
+                            frame_base: frames,
+                            stack_base: stack,
+                            saved_result: self.result.take(),
+                            constructor: invocation.constructor,
+                        });
+                    }
                 }
+                Instruction::Return => {
+                    if activations.len() == 1 {
+                        return Err("SystemError: RETURN outside function".to_string());
+                    }
+                    let value = self
+                        .stack
+                        .pop()
+                        .ok_or("SystemError: missing return value")?;
+                    let activation = activations.pop().ok_or("SystemError: missing activation")?;
+                    self.frames.truncate(activation.frame_base);
+                    self.stack.truncate(activation.stack_base);
+                    self.result = activation.saved_result;
+                    self.stack.push(activation.constructor.unwrap_or(value));
+                }
+                _ => self.execute_instruction(&instruction, interner, ip - 1)?,
             }
-
-            ip += 1;
-
-            self.trace_state(instruction, ip, trace);
+            self.trace_state(&instruction, ip, trace);
         }
-
-        Ok(self
-            .stack
-            .pop()
-            .or_else(|| self.result.take())
-            .unwrap_or_else(Object::none))
     }
 
     /// Executes a single instruction.
@@ -200,6 +252,33 @@ impl VM {
         ip: usize,
     ) -> Result<(), String> {
         match instruction {
+            Instruction::CreateClass(code) => {
+                if self.stack.len() < code.fields.len() {
+                    return Err("SystemError: missing class defaults".to_string());
+                }
+                let values = self.stack.split_off(self.stack.len() - code.fields.len());
+                let defaults = code.fields.iter().cloned().zip(values).collect();
+                self.stack.push(Object::class(code.clone(), defaults));
+            }
+            Instruction::GetAttribute(name) => {
+                let object = self
+                    .stack
+                    .pop()
+                    .ok_or("SystemError: missing attribute receiver")?;
+                self.stack.push(object.get_attribute(name)?);
+            }
+            Instruction::SetAttribute(name) => {
+                let value = self.stack.pop().ok_or("SystemError: missing field value")?;
+                let object = self
+                    .stack
+                    .pop()
+                    .ok_or("SystemError: missing field receiver")?;
+                let old = object.replace_field(name, value)?;
+                self.writes.push((object, name.clone(), old));
+            }
+            Instruction::Call(_) | Instruction::Return => {
+                return Err("SystemError: misplaced call instruction".to_string());
+            }
             Instruction::LoadConst(val) => {
                 self.stack.push(val.clone());
             }

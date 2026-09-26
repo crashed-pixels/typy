@@ -16,3 +16,7 @@ pub mod vm;
 
 pub mod interpreter;
 pub use interpreter::Interpreter;
+
+pub mod ast;
+
+pub mod bytecode;

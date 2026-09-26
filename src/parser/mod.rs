@@ -1,3 +1,5 @@
+mod definitions;
+pub use crate::ast::{Expr, FunctionDef, Operator, Parameter, Stmt};
 use crate::tokenizer::Token;
 use crate::types::Type;
 use alloc::{
@@ -6,105 +8,6 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-
-/// An expression node in the abstract syntax tree.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
-    /// An integer literal.
-    Number(i64),
-
-    /// A boolean literal.
-    Bool(bool),
-
-    /// A variable reference by name.
-    Name(String),
-
-    /// A binary operation combining two subexpressions.
-    BinaryOp {
-        /// The left operand.
-        left: Box<Expr>,
-        /// The operator.
-        op: Operator,
-        /// The right operand.
-        right: Box<Expr>,
-    },
-}
-
-/// A statement node in the abstract syntax tree.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
-    /// An expression used as a statement.
-    Expr(Expr),
-
-    /// A variable declaration with an optional initializer.
-    ///
-    /// Syntax: `name: type [= initializer]`
-    VariableDecl {
-        /// The variable name.
-        name: String,
-        /// The declared type.
-        typ: Type,
-        /// An optional initial value.
-        initializer: Option<Expr>,
-    },
-
-    /// An assignment to an existing variable.
-    ///
-    /// Syntax: `name = value`
-    Assign {
-        /// The variable name.
-        name: String,
-        /// The value to assign.
-        value: Expr,
-    },
-
-    /// A conditional statement with optional elif and else branches.
-    ///
-    /// Syntax:
-    /// ```text
-    /// if condition:
-    ///     statements
-    /// elif condition:
-    ///     statements
-    /// else:
-    ///     statements
-    /// ```
-    If {
-        /// The condition for the main if branch.
-        condition: Expr,
-        /// The statements to execute if the condition is true.
-        then_branch: Vec<Stmt>,
-        /// Zero or more elif branches, each with a condition and statements.
-        elif_branches: Vec<(Expr, Vec<Stmt>)>,
-        /// An optional else branch.
-        else_branch: Option<Vec<Stmt>>,
-    },
-}
-
-/// A binary operator.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum Operator {
-    /// Addition: `+`
-    Plus,
-    /// Subtraction: `-`
-    Minus,
-    /// Multiplication: `*`
-    Star,
-    /// Division: `/`
-    Slash,
-    /// Equality: `==`
-    Eq,
-    /// Inequality: `!=`
-    NotEq,
-    /// Less than: `<`
-    Less,
-    /// Greater than: `>`
-    Greater,
-    /// Less than or equal: `<=`
-    LessEq,
-    /// Greater than or equal: `>=`
-    GreaterEq,
-}
 
 /// A recursive descent parser.
 ///
@@ -185,8 +88,10 @@ impl Parser {
     /// ```
     fn parse_statement(&mut self) -> Result<Stmt, String> {
         let stmt = self.parse_statement_inner()?;
-        if !matches!(stmt, Stmt::If { .. })
-            && !matches!(self.current(), Token::NewLine | Token::Eof)
+        if !matches!(
+            stmt,
+            Stmt::If { .. } | Stmt::Function(_) | Stmt::Class { .. }
+        ) && !matches!(self.current(), Token::NewLine | Token::Eof)
         {
             return Err(format!(
                 "SyntaxError: expected newline, but got {:?}",
@@ -197,6 +102,24 @@ impl Parser {
     }
 
     fn parse_statement_inner(&mut self) -> Result<Stmt, String> {
+        match self.current() {
+            Token::Def => return self.parse_function().map(Stmt::Function),
+            Token::Class => return self.parse_class(),
+            Token::Pass => {
+                self.pos += 1;
+                return Ok(Stmt::Pass);
+            }
+            Token::Return => {
+                self.pos += 1;
+                let value = if matches!(self.current(), Token::NewLine | Token::Eof) {
+                    None
+                } else {
+                    Some(self.parse_expression()?)
+                };
+                return Ok(Stmt::Return(value));
+            }
+            _ => {}
+        }
         // Try to parse an if statement
         if self.current() == &Token::If {
             return self.parse_if_statement();
@@ -238,28 +161,35 @@ impl Parser {
 
         // Parse as expression statement
         let expr = self.parse_expression()?;
+        if self.current() == &Token::Assign {
+            self.pos += 1;
+            let value = self.parse_expression()?;
+            if let Expr::Attribute { object, name } = expr {
+                return Ok(Stmt::SetAttribute {
+                    object: *object,
+                    name,
+                    value,
+                });
+            }
+            return Err("SyntaxError: invalid assignment target".to_string());
+        }
         Ok(Stmt::Expr(expr))
     }
 
     /// Parses a type annotation.
     ///
-    /// Currently supports only `int` and `bool`.
+    /// Builtins are recognized here; nominal names are resolved by the checker.
     fn parse_type(&mut self) -> Result<Type, String> {
-        if let Token::Name(name) = self.current() {
-            match name.as_str() {
-                "int" => {
-                    self.pos += 1;
-                    Ok(Type::Int)
-                }
-                "bool" => {
-                    self.pos += 1;
-                    Ok(Type::Bool)
-                }
-                _ => Err(format!("SyntaxError: unknown type {:?}", name)),
-            }
-        } else {
-            Err("SyntaxError: expected type annotation".to_string())
+        if self.current() == &Token::None {
+            self.pos += 1;
+            return Ok(Type::None);
         }
+        let name = self.parse_name()?;
+        Ok(match name.as_str() {
+            "int" => Type::Int,
+            "bool" => Type::Bool,
+            _ => Type::Named(name),
+        })
     }
 
     /// Parses an if statement.
@@ -441,7 +371,44 @@ impl Parser {
     ///        | '(' expression ')'
     /// ```
     fn parse_factor(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_atom()?;
+        loop {
+            match self.current() {
+                Token::Dot => {
+                    self.pos += 1;
+                    expr = Expr::Attribute {
+                        object: Box::new(expr),
+                        name: self.parse_name()?,
+                    };
+                }
+                Token::LParen => {
+                    self.pos += 1;
+                    let mut arguments = Vec::new();
+                    while self.current() != &Token::RParen {
+                        arguments.push(self.parse_expression()?);
+                        if self.current() != &Token::Comma {
+                            break;
+                        }
+                        self.pos += 1;
+                    }
+                    self.eat(Token::RParen)?;
+                    expr = Expr::Call {
+                        callee: Box::new(expr),
+                        arguments,
+                    };
+                }
+                _ => break,
+            }
+        }
+        Ok(expr)
+    }
+
+    fn parse_atom(&mut self) -> Result<Expr, String> {
         match self.current() {
+            Token::None => {
+                self.pos += 1;
+                Ok(Expr::None)
+            }
             Token::Number(n) => {
                 let value = *n;
                 self.pos += 1;

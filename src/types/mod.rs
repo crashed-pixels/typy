@@ -1,37 +1,10 @@
-use crate::object::{BOOL_TYPE, INT_TYPE, TypeObject};
+mod definitions;
+mod value;
 use crate::parser::{Expr, Operator, Stmt};
 use crate::symbol::{Interner, SymbolId};
 use alloc::{collections::BTreeMap, format, string::String, vec, vec::Vec};
-
-/// A type in the type system.
-///
-/// This enum represents the primitive types supported by the interpreter.
-/// Future extensions may add floating point numbers, strings, functions,
-/// or user-defined types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Type {
-    /// A 64-bit signed integer.
-    Int,
-    /// A boolean value.
-    Bool,
-}
-
-impl Type {
-    /// Returns the name of this type as it appears in source code.
-    ///
-    /// This is used for error messages and type annotations.
-    pub fn name(&self) -> &'static str {
-        self.type_object().name()
-    }
-
-    /// The runtime descriptor corresponding to this statically checked type.
-    pub fn type_object(&self) -> &'static TypeObject {
-        match self {
-            Type::Int => &INT_TYPE,
-            Type::Bool => &BOOL_TYPE,
-        }
-    }
-}
+use definitions::ClassInfo;
+pub use value::{Signature, Type};
 
 /// A static type checker.
 ///
@@ -46,6 +19,8 @@ pub struct TypeChecker {
     /// A stack of lexical scopes, each mapping symbol IDs to types.
     /// The last element is the current (innermost) scope.
     scopes: Vec<BTreeMap<SymbolId, Type>>,
+    classes: BTreeMap<String, ClassInfo>,
+    return_type: Option<Type>,
 }
 
 impl Default for TypeChecker {
@@ -59,6 +34,8 @@ impl TypeChecker {
     pub fn new() -> Self {
         TypeChecker {
             scopes: vec![BTreeMap::new()],
+            classes: BTreeMap::new(),
+            return_type: None,
         }
     }
 
@@ -142,6 +119,43 @@ impl TypeChecker {
 
     fn check_stmt(&mut self, stmt: &Stmt, interner: &mut Interner) -> Result<Stmt, String> {
         match stmt {
+            Stmt::Function(function) => return self.check_function_definition(function, interner),
+            Stmt::Class { name, body } => return self.check_class(name, body, interner),
+            Stmt::Pass => {}
+            Stmt::Return(value) => {
+                let expected = self
+                    .return_type
+                    .clone()
+                    .ok_or("TypeError: return outside a function")?;
+                let actual = match value {
+                    Some(expr) => self.check_expr(expr, interner)?,
+                    None => Type::None,
+                };
+                if expected != actual {
+                    return Err(format!(
+                        "TypeError: return expected '{}', got '{}'",
+                        expected.name(),
+                        actual.name()
+                    ));
+                }
+            }
+            Stmt::SetAttribute {
+                object,
+                name,
+                value,
+            } => {
+                let owner = self.check_expr(object, interner)?;
+                let expected = self.field_type(&owner, name)?;
+                let actual = self.check_expr(value, interner)?;
+                if expected != actual {
+                    return Err(format!(
+                        "TypeError: field '{}' expected '{}', got '{}'",
+                        name,
+                        expected.name(),
+                        actual.name()
+                    ));
+                }
+            }
             Stmt::Expr(expr) => {
                 self.check_expr(expr, interner)?;
             }
@@ -150,6 +164,7 @@ impl TypeChecker {
                 typ,
                 initializer,
             } => {
+                self.validate_type(typ)?;
                 let sym_id = interner.intern(name);
                 if let Some(init) = initializer {
                     let init_type = self.check_expr(init, interner)?;
@@ -162,7 +177,10 @@ impl TypeChecker {
                         ));
                     }
                 }
-                self.declare(sym_id, *typ, interner)?;
+                if initializer.is_none() && !matches!(typ, Type::Int | Type::Bool | Type::None) {
+                    return Err(format!("TypeError: '{}' requires an initializer", name));
+                }
+                self.declare(sym_id, typ.clone(), interner)?;
             }
             Stmt::Assign { name, value } => {
                 // Infer the RHS before introducing the binding: `x = x + 1`
@@ -179,7 +197,7 @@ impl TypeChecker {
                         ));
                     }
                 } else {
-                    self.declare(sym_id, typ, interner)?;
+                    self.declare(sym_id, typ.clone(), interner)?;
                     return Ok(Stmt::VariableDecl {
                         name: name.clone(),
                         typ,
@@ -249,13 +267,40 @@ impl TypeChecker {
     /// Type-checks an expression and returns its type.
     fn check_expr(&mut self, expr: &Expr, interner: &mut Interner) -> Result<Type, String> {
         match expr {
+            Expr::None => Ok(Type::None),
+            Expr::Attribute { object, name } => {
+                let owner = self.check_expr(object, interner)?;
+                self.attribute_type(&owner, name)
+            }
+            Expr::Call { callee, arguments } => {
+                let typ = self.check_expr(callee, interner)?;
+                let signature = self.call_signature(&typ)?;
+                if signature.parameters.len() != arguments.len() {
+                    return Err(format!(
+                        "TypeError: expected {} arguments, got {}",
+                        signature.parameters.len(),
+                        arguments.len()
+                    ));
+                }
+                for (argument, expected) in arguments.iter().zip(&signature.parameters) {
+                    let actual = self.check_expr(argument, interner)?;
+                    if &actual != expected {
+                        return Err(format!(
+                            "TypeError: argument expected '{}', got '{}'",
+                            expected.name(),
+                            actual.name()
+                        ));
+                    }
+                }
+                Ok(*signature.result)
+            }
             Expr::Number(_) => Ok(Type::Int),
             Expr::Bool(_) => Ok(Type::Bool),
 
             Expr::Name(name) => {
                 let sym_id = interner.intern(name);
                 self.resolve(sym_id)
-                    .copied()
+                    .cloned()
                     .ok_or_else(|| format!("NameError: name '{}' is not defined", name))
             }
 

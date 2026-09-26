@@ -124,10 +124,9 @@ fn parses_if_elif_else() {
 }
 
 #[test]
-fn rejects_unknown_type() {
-    let tokens = tokenize_str("x: float\n");
-    let result = Parser::new(tokens).parse();
-
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("unknown type"));
+fn parses_nominal_annotation_for_type_checker_resolution() {
+    let statements = parse("x: Point\n");
+    assert!(
+        matches!(&statements[0], Stmt::VariableDecl { typ: Type::Named(name), .. } if name == "Point")
+    );
 }

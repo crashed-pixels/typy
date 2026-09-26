@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0], and this project adheres to
 [Semantic Versioning 2.0.0].
 
+## [Unreleased]
+
+### Added
+
+- `no_std + alloc` core, embedding API, trace callbacks, and ARM/RISC-V/Wasm build checks.
+- Typed functions, recursion, early returns, `None`, and `pass`.
+- User classes, declared fields, constructors, bound methods, and nominal type checking.
+- Checked signatures, argument counts, field assignments, and return-path coverage.
+- Heap-backed call frames with a configurable recursion limit and transactional field writes.
+
+### Changed
+
+- Infer fixed binding types from initializers; preserve explicit block shadowing.
+- Represent values with owned TyPy objects and shared builtin/user type descriptors.
+- Split syntax, type checking, compilation, objects, VM calls, and CLI into focused modules.
+- Extract a stream-testable REPL; document language limits and Rust API migration.
+- Run host CI on Linux, Windows, and macOS, including release and core-only tests.
+
+### Fixed
+
+- Enclosing-local resolution, leaked scopes/frames, failed initializers, and stale operands (#5).
+- Recoverable integer overflow and tokenizer diagnostics; static boolean-ordering checks (#5).
+- Statement boundaries, blank-line/CRLF handling, and REPL buffering at EOF (#5).
+- Roll back aliased instance mutations and unwind calls after runtime errors.
+
 ## [0.2.0] - 2026-08-30
 
 ### Added

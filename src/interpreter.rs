@@ -23,6 +23,12 @@ impl Interpreter {
         Self::default()
     }
 
+    /// Set the maximum active function/method calls (default: 128).
+    /// Calls use heap-backed VM frames; choose a limit for the host's memory budget.
+    pub fn set_call_limit(&mut self, limit: usize) {
+        self.vm.set_call_limit(limit);
+    }
+
     /// Evaluates one complete submission and returns its last expression.
     ///
     /// ```

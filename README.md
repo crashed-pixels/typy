@@ -1,122 +1,93 @@
 # TyPy
 
-_**Ty**ped **Py**thon_
-
-> ⚠️ Under Development
-
-A programming language inspired by Python. The goal is to build clean and maintainable code using the best of the Python ecosystem. The language is:
-
-1. **Statically Typed** — catches type errors at compile time
-2. **Simple** — minimal syntax and semantics
-3. **Small** — focused feature set with predictable behavior
-
-## Features
-
-- Static type system with `int` and `bool` types
-- Python-like syntax with indentation-based blocks
-- Conditional statements (`if` / `elif` / `else`)
-- Arithmetic and comparison operators
-- Stack-based bytecode virtual machine
-- Interactive REPL for quick experimentation
-- File execution with filename validation
-
-## Quick Start
-
-### Execute a File
-
-Create a file `example.tp` with snake_case naming:
+A small, statically typed Python-like language written in Rust.
+Source is parsed, type-checked, compiled to bytecode, and executed by a stack VM.
+The core uses `no_std + alloc`; the optional desktop CLI provides files and REPL.
 
 ```python
-a: int = 10
-b: int = 20
-result: int = a * b
+def twice(n: int) -> int:
+    return n + n
+
+class Counter:
+    value: int = 0
+
+    def __init__(self, start: int) -> None:
+        self.value = start
+
+    def add(self, amount: int) -> int:
+        self.value = self.value + amount
+        return self.value
+
+counter = Counter(10)
+counter.add(twice(3))
 ```
 
-Run it with:
+The result is `16`.
 
-```bash
-$ typy example.tp
-200
+## Language
+
+- Checked `i64` integers, booleans, `None`, arithmetic, comparisons, `if/elif/else`.
+- `a = 123` infers a fixed type; `a = True` afterward is a static error.
+- Annotated block declarations can shadow outer variables. Ordinary assignments
+  update the nearest visible binding.
+- Functions require parameter and return annotations. Methods infer the type of
+  their first parameter, `self`. Calls, fields, returns, and all return paths are
+  checked before execution. Functions support recursion and early `return`.
+- Classes have declared fields, optional `__init__`, instance methods, and nominal
+  instance types. Bound methods can be assigned to variables and called later.
+- A failed submission rolls back declarations, globals, and instance-field writes.
+  The last executed expression is displayed; declarations and assignments are silent.
+
+Current limits: module-level definitions, positional arguments, no inheritance,
+closures, decorators, or dynamic attributes. Declare fields in the class body.
+Object-valued fields require defaults and can refer only to earlier classes,
+keeping ownership acyclic. Defaults are copied for each new instance.
+
+## Run
+
+```sh
+cargo run                       # REPL; a blank line submits a block
+cargo run -- example.tp          # snake_case filename, .tp extension
+cargo run -- --debug example.tp  # tokens, AST, bytecode, VM state
 ```
 
-TyPy enforces filename must have the `.tp` extension.
+EOF submits pending REPL input. LF and CRLF source are supported.
 
-### Interactive REPL
+## Embed
 
-We also support an interactive REPL:
-
-```bash
-$ typy
-=== TyPy (v 0.1.0) ===
->>> a: int = 10
-10
->>> b: int = 20
-20
->>> b * a
-200
-```
-
-## Contributing
-
-### Architecture
-
-The language is written in Rust using a stack-based virtual machine. All code goes through the following pipeline:
-
-```mermaid
-graph TD
-    A(Tokenizer) -->|CST| B(Parser)
-    B -->|AST| C(Type Checker)
-    C -->|Type Validated AST| D(Compiler)
-    D -->|Bytecode| E(Virtual Machine)
-```
-
-### Making PR
-
-Before submitting a PR, ensure your code passes:
-
-1. Formatted `cargo fmt --all -- --check`
-2. Linted `cargo clippy --locked --all-targets --all-features -- -D warnings`
-3. Tested `cargo test --locked --all-features --verbose`
-4. Built `cargo build --locked --verbose`
-
-You can use `just` for quick check `$ just check-all`
-
-## Execution semantics
-
-- `int` is a signed 64-bit integer. Arithmetic overflow raises `OverflowError`
-  in both debug and release builds; division by zero raises `ZeroDivisionError`.
-- Variables declared in a block are lexical locals. Nested blocks read and write
-  the nearest declaration, and a shadowing declaration does not modify globals.
-- Each REPL submission is atomic: a type or runtime error leaves existing global
-  values and declarations unchanged, including writes before the failing statement.
-  A failed initializer can be retried. Interned symbol IDs remain allocated.
-- The displayed result is the last expression statement actually executed in the
-  submission. Assignments and declarations are silent. Empty submissions have no
-  result; operand values and temporary block frames do not survive a run.
-- Equality supports matching `int` or `bool` operands; ordering requires `int`.
-- Simple statements require newlines. Blank lines in files do not affect block
-  indentation; LF and CRLF are equivalent. A blank line submits a REPL block;
-  EOF executes pending input (or reports a syntax error if it is incomplete).
-- Library clients handling untrusted source should use
-  `tokenizer::try_tokenize_str`, which returns `Result`. The legacy `tokenize`
-  and `tokenize_str` wrappers retain their panic-on-error behavior.
-
-## Portable core and inferred bindings
-
-TyPy's library is always `no_std + alloc`. The default `cli` feature keeps the
-file runner, REPL, and debug output available on desktop systems. Embedded hosts
-provide an allocator and I/O; disable default features when embedding.
+Disable default features in the embedding dependency. The host supplies an
+allocator, startup code, panic handler, and I/O; `no_std` does not mean heapless.
 
 ```rust
 let mut interpreter = typy::Interpreter::new();
+interpreter.set_call_limit(128); // default; heap-backed VM call frames
 interpreter.eval("a = 123")?;
 assert_eq!(interpreter.eval("a + 1")?.as_int(), Some(124));
-// The inferred type stays fixed: `a = True` is a type error.
 ```
 
-Runtime `int`, `bool`, and internal `None` values now use owned TyPy object
-handles with a common header and shared type descriptors. Cloning preserves
-object identity through non-atomic reference counting.
+Objects use non-atomic reference counting and are single-threaded. Trace callbacks
+are available through `eval_with_trace`. See [embedding details](docs/embedding.md).
 
-See [embedding, object architecture, and Rust API migration](docs/embedding.md)
-for platform requirements, shadowing rules, and the compile-only embedded example.
+## Layout
+
+| Module | Responsibility |
+| --- | --- |
+| `ast`, `tokenizer`, `parser` | Syntax and declarations |
+| `types` | Inference, signatures, nominal classes, return checking |
+| `bytecode`, `compiler` | Instructions and function/class compilation |
+| `object` | Type descriptors, values, instances, bound methods |
+| `vm`, `interpreter` | Calls, execution, transactional state |
+| `cli/repl`, `cli/session`, `cli/config` | Input buffering, presentation, arguments |
+
+## Check
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features
+cargo test --release --locked --all-features
+cargo test --locked --no-default-features
+```
+
+CI covers Linux, Windows, macOS, and cross-compilation for Cortex-M0, RISC-V,
+and WebAssembly. Cross-compilation does not replace testing on physical devices.
