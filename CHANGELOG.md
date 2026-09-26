@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog 1.1.0], and this project adheres to
 
 ### Added
 
+- Compile-time explicit imports, aliases, qualified names and `lib.tp` library entries.
+- Canonical module identities, shared diamond dependencies and cycle diagnostics.
+- Host-supplied module loading and output APIs that preserve `no_std + alloc`.
+- Native `print()` objects with variadic positional arguments and `None` results.
+- Markdown language/internals guides with executable documentation examples.
 - `no_std + alloc` core, embedding API, trace callbacks, and ARM/RISC-V/Wasm build checks.
 - Typed functions, recursion, early returns, `None`, and `pass`.
 - User classes, declared fields, constructors, bound methods, and nominal type checking.
@@ -17,6 +22,10 @@ The format is based on [Keep a Changelog 1.1.0], and this project adheres to
 
 ### Changed
 
+- File execution now requires `main.tp` declaring `def main() -> None`.
+- Keep executable statements inside functions; prohibit calls in module initializers.
+- Print program output only through `print()`; send file-mode debug traces to stderr.
+- Retain interactive result echo and persistent evaluation in the separate REPL.
 - Infer fixed binding types from initializers; preserve explicit block shadowing.
 - Represent values with owned TyPy objects and shared builtin/user type descriptors.
 - Split syntax, type checking, compilation, objects, VM calls, and CLI into focused modules.

@@ -17,6 +17,7 @@ pub(super) struct BoundMethod {
     receiver: Object,
 }
 pub(crate) enum Callable {
+    Builtin(crate::builtins::Builtin),
     Function(Rc<FunctionCode>),
     Bound(Rc<FunctionCode>, Object),
     Class(Rc<ClassObject>),
@@ -39,6 +40,7 @@ impl Object {
     }
     pub(crate) fn callable(&self) -> Result<Callable, String> {
         match &self.0.payload {
+            Payload::Builtin(builtin) => Ok(Callable::Builtin(*builtin)),
             Payload::Function(function) => Ok(Callable::Function(function.clone())),
             Payload::BoundMethod(method) => Ok(Callable::Bound(
                 method.function.clone(),

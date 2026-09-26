@@ -276,6 +276,10 @@ impl Compiler {
     /// Compiles a single statement.
     fn compile_stmt(&mut self, stmt: &Stmt, interner: &mut Interner) {
         match stmt {
+            // Public low-level compilation requires resolved, checked input.
+            Stmt::Import { .. } | Stmt::FromImport { .. } => {
+                panic!("imports must be expanded before compilation");
+            }
             Stmt::Function(function) => {
                 let code = Self::compile_function(function, interner);
                 self.emit(Instruction::LoadConst(Object::function(code)));

@@ -280,13 +280,15 @@ fn repl_keeps_elif_else_and_dedented_expressions() {
 #[test]
 #[cfg(feature = "cli")]
 fn file_lexical_error_has_normal_exit_status() {
-    let path = std::env::temp_dir().join(format!("typy_issue_five_{}.tp", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("typy_issue_five_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("main.tp");
     std::fs::write(&path, "@\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_typy"))
         .arg(&path)
         .output()
         .unwrap();
-    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(
         String::from_utf8(output.stderr)

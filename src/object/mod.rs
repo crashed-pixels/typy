@@ -37,6 +37,7 @@ impl BoolObject {
 pub struct NoneObject;
 
 enum Payload {
+    Builtin(crate::builtins::Builtin),
     Function(Rc<FunctionCode>),
     Class(Rc<ClassObject>),
     Instance(InstanceObject),
@@ -65,6 +66,9 @@ impl Object {
             header: ObjectHeader::builtin(typ),
             payload,
         }))
+    }
+    pub(crate) fn builtin(value: crate::builtins::Builtin) -> Self {
+        Self::new(&BUILTIN_FUNCTION_TYPE, Payload::Builtin(value))
     }
     pub fn int(value: i64) -> Self {
         Self::new(&INT_TYPE, Payload::Int(IntObject { value }))
@@ -124,6 +128,7 @@ impl fmt::Display for Object {
             Payload::Int(value) => write!(f, "{}", value.value()),
             Payload::Bool(value) => f.write_str(if value.value() { "True" } else { "False" }),
             Payload::None(_) => f.write_str("None"),
+            Payload::Builtin(builtin) => write!(f, "<built-in function {}>", builtin.name()),
             Payload::Function(code) => write!(f, "<function {}>", code.name),
             Payload::Class(class) => write!(f, "<class {}>", class.code.name),
             Payload::Instance(instance) => write!(f, "<{} instance>", instance.class.code.name),
@@ -138,6 +143,7 @@ impl fmt::Debug for Object {
             Payload::Int(value) => f.debug_tuple("Int").field(&value.value()).finish(),
             Payload::Bool(value) => f.debug_tuple("Bool").field(&value.value()).finish(),
             Payload::None(_) => f.write_str("None"),
+            Payload::Builtin(builtin) => write!(f, "<built-in function {}>", builtin.name()),
             Payload::Function(code) => write!(f, "<function {}>", code.name),
             Payload::Class(class) => write!(f, "<class {}>", class.code.name),
             Payload::Instance(instance) => write!(f, "<{} instance>", instance.class.code.name),

@@ -119,6 +119,9 @@ impl TypeChecker {
 
     fn check_stmt(&mut self, stmt: &Stmt, interner: &mut Interner) -> Result<Stmt, String> {
         match stmt {
+            Stmt::Import { .. } | Stmt::FromImport { .. } => {
+                return Err("ImportError: imports require a module loader and module scope".into());
+            }
             Stmt::Function(function) => return self.check_function_definition(function, interner),
             Stmt::Class { name, body } => return self.check_class(name, body, interner),
             Stmt::Pass => {}
@@ -274,6 +277,12 @@ impl TypeChecker {
             }
             Expr::Call { callee, arguments } => {
                 let typ = self.check_expr(callee, interner)?;
+                if let Type::Builtin(builtin) = typ {
+                    for argument in arguments {
+                        self.check_expr(argument, interner)?;
+                    }
+                    return Ok(builtin.result_type());
+                }
                 let signature = self.call_signature(&typ)?;
                 if signature.parameters.len() != arguments.len() {
                     return Err(format!(
@@ -301,6 +310,7 @@ impl TypeChecker {
                 let sym_id = interner.intern(name);
                 self.resolve(sym_id)
                     .cloned()
+                    .or_else(|| crate::builtins::lookup(name).map(Type::Builtin))
                     .ok_or_else(|| format!("NameError: name '{}' is not defined", name))
             }
 

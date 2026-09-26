@@ -5,64 +5,14 @@ pub(super) struct Config {
     pub file_path: Option<String>,
 }
 
-/// Validates that a filename follows snake_case convention.
-///
-/// A valid snake_case filename:
-/// - Contains only lowercase letters, digits, and underscores
-/// - Does not start with a digit
-/// - Is not empty
-fn is_valid_snake_case(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-
-    // First character must be a lowercase letter or underscore
-    let first = name.chars().next().unwrap_or('_');
-    if !first.is_ascii_lowercase() && first != '_' {
-        return false;
-    }
-
-    // All characters must be lowercase letters, digits, or underscores
-    name.chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-/// Validates that a file path has the correct .tp extension and snake_case name.
-///
-/// Returns Ok(()) if valid, or an error message if invalid.
+/// File execution always starts at a main.tp entry.
 fn validate_file_path(path: &str) -> Result<(), String> {
-    let path_obj = Path::new(path);
-
-    // Check extension
-    match path_obj.extension() {
-        Some(ext) if ext == "tp" => {}
-        Some(ext) => {
-            return Err(format!(
-                "Invalid file extension '.{}'. Expected '.tp'",
-                ext.to_string_lossy()
-            ));
-        }
-        None => {
-            return Err("File must have '.tp' extension".to_string());
-        }
+    if Path::new(path)
+        .file_name()
+        .is_none_or(|name| name != "main.tp")
+    {
+        return Err("EntryError: only main.tp can be executed; libraries use lib.tp".into());
     }
-
-    // Check filename (without extension)
-    match path_obj.file_stem() {
-        Some(stem) => {
-            let name = stem.to_string_lossy();
-            if !is_valid_snake_case(&name) {
-                return Err(format!(
-                    "Filename '{}' must be in snake_case (lowercase letters, digits, underscores, cannot start with digit)",
-                    name
-                ));
-            }
-        }
-        None => {
-            return Err("Invalid file path".to_string());
-        }
-    }
-
     Ok(())
 }
 
@@ -70,7 +20,7 @@ fn validate_file_path(path: &str) -> Result<(), String> {
 ///
 /// Supported arguments:
 /// - `--debug` or `-d`: Enable debug output
-/// - `<file.tp>`: Execute the specified file instead of starting REPL
+/// - `<main.tp>`: Execute the specified file instead of starting REPL
 ///
 /// # Errors
 ///

@@ -48,11 +48,30 @@ impl Interpreter {
         source: &str,
         trace: impl FnMut(&TraceEvent<'_>),
     ) -> Result<Object, String> {
+        self.eval_with_io(source, crate::builtins::no_output, trace)
+    }
+
+    /// Evaluates with explicit output; expression results remain host-owned.
+    pub fn eval_with_output(
+        &mut self,
+        source: &str,
+        output: impl FnMut(&str) -> Result<(), String>,
+    ) -> Result<Object, String> {
+        self.eval_with_io(source, output, |_| {})
+    }
+
+    /// Combines output and tracing without platform dependencies.
+    pub fn eval_with_io(
+        &mut self,
+        source: &str,
+        output: impl FnMut(&str) -> Result<(), String>,
+        trace: impl FnMut(&TraceEvent<'_>),
+    ) -> Result<Object, String> {
         let ast = Parser::new(try_tokenize_str(source)?).parse()?;
         let mut candidate = self.checker.clone();
         let ast = candidate.check_and_resolve(&ast, &mut self.interner)?;
         let code = Compiler::new().compile(&ast, &mut self.interner);
-        let result = self.vm.run_with_trace(&code, &self.interner, trace)?;
+        let result = self.vm.run_with_io(&code, &self.interner, output, trace)?;
         self.checker = candidate;
         Ok(result)
     }

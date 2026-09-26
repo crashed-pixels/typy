@@ -82,3 +82,8 @@ pub static FUNCTION_TYPE: TypeObject = TypeObject {
     name: Cow::Borrowed("function"),
     base: Some(&OBJECT_TYPE),
 };
+
+pub static BUILTIN_FUNCTION_TYPE: TypeObject = TypeObject {
+    name: Cow::Borrowed("builtin_function_or_method"),
+    base: Some(&OBJECT_TYPE),
+};

@@ -1,4 +1,5 @@
 mod definitions;
+mod imports;
 pub use crate::ast::{Expr, FunctionDef, Operator, Parameter, Stmt};
 use crate::tokenizer::Token;
 use crate::types::Type;
@@ -103,6 +104,7 @@ impl Parser {
 
     fn parse_statement_inner(&mut self) -> Result<Stmt, String> {
         match self.current() {
+            Token::Import | Token::From => return self.parse_import(),
             Token::Def => return self.parse_function().map(Stmt::Function),
             Token::Class => return self.parse_class(),
             Token::Pass => {
@@ -184,7 +186,7 @@ impl Parser {
             self.pos += 1;
             return Ok(Type::None);
         }
-        let name = self.parse_name()?;
+        let name = self.parse_dotted_name()?;
         Ok(match name.as_str() {
             "int" => Type::Int,
             "bool" => Type::Bool,

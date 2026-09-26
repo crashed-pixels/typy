@@ -20,3 +20,6 @@ pub use interpreter::Interpreter;
 pub mod ast;
 
 pub mod bytecode;
+
+pub mod builtins;
+pub mod modules;

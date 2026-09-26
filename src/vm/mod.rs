@@ -142,10 +142,22 @@ impl VM {
         &mut self,
         bytecode: &[Instruction],
         interner: &Interner,
+        trace: impl FnMut(&TraceEvent<'_>),
+    ) -> Result<Object, String> {
+        self.run_with_io(bytecode, interner, crate::builtins::no_output, trace)
+    }
+
+    /// Executes with host-provided output and tracing. Output is immediate and
+    /// cannot be rolled back; transport errors roll back interpreter state.
+    pub fn run_with_io(
+        &mut self,
+        bytecode: &[Instruction],
+        interner: &Interner,
+        mut output: impl FnMut(&str) -> Result<(), String>,
         mut trace: impl FnMut(&TraceEvent<'_>),
     ) -> Result<Object, String> {
         let globals = self.globals.clone();
-        let outcome = self.run_instructions(bytecode, interner, &mut trace);
+        let outcome = self.run_instructions(bytecode, interner, &mut output, &mut trace);
         self.stack.clear();
         self.frames.truncate(1);
         self.result = None;
@@ -170,6 +182,7 @@ impl VM {
         &mut self,
         bytecode: &[Instruction],
         interner: &Interner,
+        output: &mut impl FnMut(&str) -> Result<(), String>,
         trace: &mut impl FnMut(&TraceEvent<'_>),
     ) -> Result<Object, String> {
         let mut activations = vec![Activation::root(bytecode)];
@@ -198,7 +211,7 @@ impl VM {
                     }
                 }
                 Instruction::Call(arity) => {
-                    if let Some(invocation) = self.prepare_call(*arity)? {
+                    if let Some(invocation) = self.prepare_call(*arity, output)? {
                         if activations.len() > self.call_limit {
                             return Err("RecursionError: call limit exceeded".to_string());
                         }
@@ -348,11 +361,18 @@ impl VM {
     ///
     /// Loads a global variable by symbol ID and pushes it onto the stack.
     fn execute_load_name(&mut self, sym_id: SymbolId, interner: &Interner) -> Result<(), String> {
-        let value = self.globals.get(&sym_id).ok_or_else(|| {
-            let name = interner.resolve(sym_id);
-            format!("NameError: name '{}' is not defined", name)
-        })?;
-        self.stack.push(value.clone());
+        if let Some(value) = self.globals.get(&sym_id) {
+            self.stack.push(value.clone());
+        } else if let Some(builtin) = crate::builtins::lookup(interner.resolve(sym_id)) {
+            let value = Object::builtin(builtin);
+            self.globals.insert(sym_id, value.clone());
+            self.stack.push(value);
+        } else {
+            return Err(format!(
+                "NameError: name '{}' is not defined",
+                interner.resolve(sym_id)
+            ));
+        }
         Ok(())
     }
 

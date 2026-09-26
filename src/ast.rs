@@ -36,6 +36,15 @@ pub enum Expr {
 /// A statement node in the abstract syntax tree.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
+    /// Compile-time module dependency; expanded before type checking.
+    Import {
+        module: String,
+        alias: String,
+    },
+    FromImport {
+        module: String,
+        names: Vec<ImportName>,
+    },
     Function(FunctionDef),
     Class {
         name: String,
@@ -134,4 +143,10 @@ pub struct FunctionDef {
     pub parameters: Vec<Parameter>,
     pub return_type: Type,
     pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportName {
+    pub name: String,
+    pub alias: String,
 }

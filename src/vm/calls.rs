@@ -42,7 +42,11 @@ pub(super) struct Invocation {
 }
 
 impl VM {
-    pub(super) fn prepare_call(&mut self, arity: usize) -> Result<Option<Invocation>, String> {
+    pub(super) fn prepare_call(
+        &mut self,
+        arity: usize,
+        output: &mut impl FnMut(&str) -> Result<(), String>,
+    ) -> Result<Option<Invocation>, String> {
         if self.stack.len() <= arity {
             return Err("SystemError: missing call operands".to_string());
         }
@@ -50,6 +54,10 @@ impl VM {
         let callee = self.stack.pop().ok_or("SystemError: missing callee")?;
         let mut constructor = None;
         let function = match callee.callable()? {
+            Callable::Builtin(builtin) => {
+                self.stack.push(builtin.call(&arguments, output)?);
+                return Ok(None);
+            }
             Callable::Function(function) => function,
             Callable::Bound(function, receiver) => {
                 arguments.insert(0, receiver);

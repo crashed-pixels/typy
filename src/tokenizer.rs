@@ -12,6 +12,9 @@ use core::str::Chars;
 /// This enum intentionally keeps a small, Python-like token set.
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
+    Import,
+    From,
+    As,
     Def,
     Class,
     Return,
@@ -440,6 +443,9 @@ fn is_name_continue(ch: char) -> bool {
 /// Maps an identifier string to a keyword token, if applicable.
 fn keyword_token(name: &str) -> Option<Token> {
     match name {
+        "import" => Some(Token::Import),
+        "from" => Some(Token::From),
+        "as" => Some(Token::As),
         "def" => Some(Token::Def),
         "class" => Some(Token::Class),
         "return" => Some(Token::Return),

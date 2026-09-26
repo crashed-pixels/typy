@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{cell::RefCell, io::Write};
 use typy::{
     compiler::Compiler, parser::Parser, symbol::Interner, tokenizer::try_tokenize_str,
     types::TypeChecker, vm::VM,
@@ -44,11 +44,22 @@ impl Session {
             writeln!(output, "\n[3] Byte-code: {code:?}\n\n[4] Running:")?;
         }
         let mut trace_error = None;
-        let result = self.vm.run_with_trace(&code, &self.interner, |event| {
-            if self.debug && trace_error.is_none() {
-                trace_error = writeln!(output, "{event}").err();
-            }
-        })?;
+        let shared_output = RefCell::new(&mut *output);
+        let result = self.vm.run_with_io(
+            &code,
+            &self.interner,
+            |line| {
+                shared_output
+                    .borrow_mut()
+                    .write_all(line.as_bytes())
+                    .map_err(|error| format!("IOError: {error}"))
+            },
+            |event| {
+                if self.debug && trace_error.is_none() {
+                    trace_error = writeln!(shared_output.borrow_mut(), "{event}").err();
+                }
+            },
+        )?;
         // A failed output transport must not commit only one side of the state.
         self.checker = candidate;
         if let Some(error) = trace_error {

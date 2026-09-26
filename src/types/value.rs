@@ -6,6 +6,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 /// Nominal instance types and structural callable signatures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    Builtin(crate::builtins::Builtin),
     Int,
     Bool,
     None,
@@ -23,6 +24,7 @@ pub struct Signature {
 impl Type {
     pub fn name(&self) -> &str {
         match self {
+            Self::Builtin(_) => "builtin_function_or_method",
             Self::Int => "int",
             Self::Bool => "bool",
             Self::None => "NoneType",
@@ -34,6 +36,7 @@ impl Type {
     /// Builtin category; user instances carry their precise descriptor at runtime.
     pub fn type_object(&self) -> &'static TypeObject {
         match self {
+            Self::Builtin(_) => &crate::object::BUILTIN_FUNCTION_TYPE,
             Self::Int => &INT_TYPE,
             Self::Bool => &BOOL_TYPE,
             Self::None => &NONE_TYPE,
